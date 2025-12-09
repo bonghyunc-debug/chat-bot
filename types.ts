@@ -1,0 +1,131 @@
+
+import { Chat, Part, GroundingMetadata } from "@google/genai";
+
+export interface Attachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  data: string; // Base64 string for binary, raw string for text
+  category: 'image' | 'video' | 'audio' | 'pdf' | 'text';
+}
+
+export interface UsageMetadata {
+  promptTokenCount: number;
+  candidatesTokenCount: number;
+  totalTokenCount: number;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'model' | 'error';
+  content: string;
+  timestamp: Date;
+  thoughts?: string; 
+  groundingMetadata?: GroundingMetadata;
+  usageMetadata?: UsageMetadata; // Token usage info
+  isLoading?: boolean;
+  attachments?: Attachment[]; // Replaces single 'image' field
+  
+  // Attachment for model generated content (e.g. generated images)
+  modelAttachment?: {
+    data: string;
+    mimeType: string;
+  };
+}
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  lastModified: number;
+  settings: ChatSettings;
+}
+
+export interface ModelOption {
+  id: string;
+  name: string;
+  description?: string;
+  tags?: string[];
+  isVision?: boolean;
+  isReasoning?: boolean;
+  isFast?: boolean;
+}
+
+export interface ContentPart {
+  text?: string;
+  inlineData?: { mimeType: string; data: string };
+}
+
+export interface ChatHistoryItem {
+  role: 'user' | 'model';
+  parts: ContentPart[];
+}
+
+export interface SafetySetting {
+  category: string;
+  threshold: string;
+}
+
+export interface SystemPromptPreset {
+  id: string;
+  name: string;
+  description?: string;
+  instruction: string;
+}
+
+export interface ToolFunctionDefinition {
+  name: string;
+  description?: string;
+  parameters?: any; // JSON Schema
+}
+
+export interface ToolSettings {
+  enableFunctionCalling: boolean;
+  functions: ToolFunctionDefinition[];
+  enableCodeExecution: boolean;
+  enableUrlGrounding: boolean;
+}
+
+export interface ChatSettings {
+  modelId: string;
+  systemInstruction: string;
+  temperature: number;
+  topP: number;
+  topK: number;
+  maxOutputTokens: number;
+  showThoughts: boolean;
+  useGoogleSearch: boolean;
+  jsonMode: boolean; // For responseMimeType: application/json
+  safetySettings: string; // Simplified for UI: 'BLOCK_NONE' | 'BLOCK_ONLY_HIGH' etc.
+  stopSequences: string[];
+  toolSettings?: ToolSettings;
+}
+
+export interface GeminiService {
+  initializeChat: (
+    modelId: string,
+    settings: ChatSettings,
+    history?: ChatHistoryItem[],
+    apiKey?: string 
+  ) => Promise<Chat | null>;
+  sendMessageStream: (
+    chat: Chat,
+    message: string,
+    attachments: Attachment[], // Updated to support array of attachments
+    onChunk: (chunk: string) => void,
+    onThoughtChunk: (chunk: string) => void,
+    onGroundingMetadata: (metadata: GroundingMetadata) => void,
+    onUsageMetadata: (usage: UsageMetadata) => void, // New callback
+    onImageGenerated: (image: { data: string; mimeType: string }) => void,
+    onError: (error: Error) => void,
+    onComplete: () => void
+  ) => Promise<void>;
+  getAvailableModels: (apiKey?: string) => Promise<ModelOption[]>;
+  countTokens: (modelId: string, apiKey: string | undefined, contents: any[]) => Promise<number | null>;
+}
+
+export interface ThoughtSupportingPart extends Part {
+    thought?: any; 
+    inlineData?: { mimeType: string; data: string };
+    text?: string;
+}
