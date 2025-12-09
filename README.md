@@ -15,6 +15,10 @@ View your app in AI Studio: https://ai.studio/apps/drive/1MlZ6i7tNjctdeWAdX4pojD
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+2. Set the `GEMINI_API_KEY` (or `VITE_GEMINI_API_KEY`) in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Playground parity helpers
+
+- The **Playground Inspector** (below the header) shows the exact payload, tools, and token usage used for the latest request, so you can validate settings before exporting code.

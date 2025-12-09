@@ -3,8 +3,9 @@ import { GoogleGenAI, Chat, Part, GroundingMetadata } from "@google/genai";
 import { GeminiService, ChatHistoryItem, ThoughtSupportingPart, ModelOption, ChatSettings, Attachment, UsageMetadata } from '../types';
 import { reportApiKeyError } from './apiKeyPool';
 
-// Default env key as fallback
-const ENV_API_KEY = process.env.API_KEY;
+// Default env key as fallback (supports Vite and Node-style envs)
+const ENV_API_KEY =
+  import.meta.env?.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || process.env.API_KEY;
 
 // Helper to create client with specific key
 const getClient = (apiKey?: string) => {
