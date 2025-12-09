@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ChatMessage, ModelOption, ChatHistoryItem, ChatSettings, ChatSession, Attachment } from './types';
+import { ChatMessage, ModelOption, ChatHistoryItem, ChatSettings, ChatSession, Attachment, UsageMetadata } from './types';
 import { DEFAULT_MODEL_ID, DEFAULT_SYSTEM_INSTRUCTION, DEFAULT_TEMPERATURE, DEFAULT_TOP_P, DEFAULT_TOP_K, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_SHOW_THOUGHTS, DEFAULT_USE_GOOGLE_SEARCH, DEFAULT_JSON_MODE, DEFAULT_SAFETY_SETTING, DEFAULT_STOP_SEQUENCES, DEFAULT_TOOL_SETTINGS } from './constants';
 import { Header } from './components/Header';
 import { MessageList } from './components/MessageList';
@@ -12,6 +12,7 @@ import CodeExportModal from './components/CodeExportModal';
 import { geminiServiceInstance } from './services/geminiService';
 import { Chat, GroundingMetadata } from '@google/genai';
 import { initApiKeyPool, getHealthyApiKey } from './services/apiKeyPool';
+import { PlaygroundInspector, PlaygroundRequestPreview } from './components/PlaygroundInspector';
 
 const App: React.FC = () => {
   // --- State: Sessions & Persistence ---
@@ -46,6 +47,7 @@ const App: React.FC = () => {
   const [isControlPanelOpen, setIsControlPanelOpen] = useState(true); // Default open for desktop
   const [isCodeModalOpen, setIsCodeModalOpen] = useState(false); // Code Export Modal State
   const [canvasContent, setCanvasContent] = useState<string>('');
+  const [isInspectorOpen, setIsInspectorOpen] = useState(false);
 
   // --- State: Current Session Settings (Active) ---
   // Initialize from LocalStorage if available, else defaults
@@ -96,6 +98,8 @@ const App: React.FC = () => {
 
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [chatSession, setChatSession] = useState<Chat | null>(null);
+  const [lastRequestPreview, setLastRequestPreview] = useState<PlaygroundRequestPreview | null>(null);
+  const [lastUsage, setLastUsage] = useState<UsageMetadata | null>(null);
 
   // Track the settings used to initialize the *current* chat object
   const [activeChatSettings, setActiveChatSettings] = useState<ChatSettings | null>(null);
@@ -324,6 +328,65 @@ const App: React.FC = () => {
       });
   };
 
+  const buildRequestPreview = (message: string, attachments: Attachment[]): PlaygroundRequestPreview => {
+    const toolConfigs: any[] = [];
+    const isImageModel = currentSettings.modelId.toLowerCase().includes('image');
+    const shouldUseSearch = currentSettings.useGoogleSearch && !currentSettings.jsonMode;
+
+    if (shouldUseSearch) {
+      toolConfigs.push({ googleSearch: {} });
+    }
+
+    if (currentSettings.toolSettings?.enableFunctionCalling && currentSettings.toolSettings.functions.length > 0) {
+      toolConfigs.push({
+        functionDeclarations: currentSettings.toolSettings.functions.map(fn => ({
+          name: fn.name,
+          description: fn.description
+        }))
+      });
+    }
+
+    if (currentSettings.toolSettings?.enableCodeExecution) {
+      toolConfigs.push({ codeExecution: {} });
+    }
+
+    if (currentSettings.toolSettings?.enableUrlGrounding) {
+      toolConfigs.push({ urlFetch: {} });
+    }
+
+    const responseMimeType = currentSettings.jsonMode && !shouldUseSearch && !isImageModel
+      ? 'application/json'
+      : undefined;
+
+    return {
+      model: currentSettings.modelId,
+      message,
+      attachments: attachments.map(att => ({ name: att.name, mimeType: att.mimeType, category: att.category })),
+      config: {
+        systemInstruction: currentSettings.systemInstruction,
+        temperature: currentSettings.temperature,
+        topP: currentSettings.topP,
+        topK: currentSettings.topK,
+        maxOutputTokens: currentSettings.maxOutputTokens,
+        stopSequences: currentSettings.stopSequences,
+        safetySettings: currentSettings.safetySettings,
+        responseMimeType,
+        tools: toolConfigs.length > 0 ? toolConfigs : undefined,
+        jsonMode: currentSettings.jsonMode,
+        useGoogleSearch: currentSettings.useGoogleSearch,
+      },
+      timestamp: new Date().toLocaleString(),
+      flags: {
+        search: shouldUseSearch,
+        jsonMode: !!responseMimeType,
+        thoughts: currentSettings.showThoughts,
+        functions: currentSettings.toolSettings?.functions.length || 0,
+        codeExecution: !!currentSettings.toolSettings?.enableCodeExecution,
+        urlGrounding: !!currentSettings.toolSettings?.enableUrlGrounding,
+      },
+    };
+  };
+
   const initializeCurrentChatSession = useCallback(async (history?: ChatHistoryItem[]) => {
     if (!currentSettings.modelId) return;
     setIsLoading(true);
@@ -363,6 +426,8 @@ const App: React.FC = () => {
   // Added optional 'overrideHistory' to support regeneration logic where state is stale
   const streamResponse = async (inputContent: string, attachments: Attachment[], overrideHistory?: ChatMessage[]) => {
     setIsLoading(true);
+    setLastUsage(null);
+    setLastRequestPreview(buildRequestPreview(inputContent, attachments));
     let currentChat = chatSession;
 
     // Use overrideHistory if provided, otherwise default to currentMessages
@@ -429,6 +494,7 @@ const App: React.FC = () => {
       },
       (usage) => {
         updateCurrentSessionMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, usageMetadata: usage, isLoading: true } : msg));
+        setLastUsage(usage);
       },
       (generatedImage) => {
         updateCurrentSessionMessages(prev => prev.map(msg => msg.id === modelMessageId ? { 
@@ -604,6 +670,13 @@ const App: React.FC = () => {
         {modelsLoadingError && (
            <div className="p-2 bg-red-900/50 text-center text-xs text-red-200 border-b border-red-800">{modelsLoadingError}</div>
         )}
+
+        <PlaygroundInspector
+          isOpen={isInspectorOpen}
+          onToggle={() => setIsInspectorOpen(!isInspectorOpen)}
+          requestPreview={lastRequestPreview}
+          usage={lastUsage}
+        />
 
         <div className="flex-1 flex overflow-hidden relative">
             <div className="flex flex-col flex-1 h-full relative min-w-0 transition-all duration-300">
