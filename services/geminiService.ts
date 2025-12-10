@@ -1,6 +1,7 @@
 
 import { GoogleGenAI, Chat, Part, GroundingMetadata } from "@google/genai";
 import { GeminiService, ChatHistoryItem, ThoughtSupportingPart, ModelOption, ChatSettings, Attachment, UsageMetadata } from '../types';
+import { MODEL_SPECS } from '../constants';
 import { reportApiKeyError } from './apiKeyPool';
 import { GeminiServiceError, parseGeminiError } from './errors';
 
@@ -185,9 +186,11 @@ const geminiServiceImpl: GeminiService = {
         thinkingLevel?: 'low' | 'medium' | 'high';
       }
 
-      // 이미지 모델은 최대 출력 토큰이 32,768로 제한됨
-      const effectiveMaxOutputTokens = isImageModel 
-        ? Math.min(settings.maxOutputTokens, 32768)
+      const modelMaxOutput = MODEL_SPECS[modelId]?.maxOutput;
+
+      // Clamp requested max output tokens to the model's documented maximum when available.
+      const effectiveMaxOutputTokens = modelMaxOutput
+        ? Math.min(settings.maxOutputTokens, modelMaxOutput)
         : settings.maxOutputTokens;
 
       const chatConfig: {
