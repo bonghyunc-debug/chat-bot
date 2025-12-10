@@ -325,17 +325,24 @@ const geminiServiceImpl: GeminiService = {
 
   sendMessageStream: async (
     chat: Chat,
-    message: string, 
-    attachments: Attachment[], 
+    message: string,
+    attachments: Attachment[],
     onChunk: (chunk: string) => void,
     onThoughtChunk: (chunk: string) => void,
     onGroundingMetadata: (metadata: GroundingMetadata) => void,
     onUsageMetadata: (usage: UsageMetadata) => void,
     onImageGenerated: (image: { data: string; mimeType: string }) => void,
     onError: (error: Error) => void,
-    onComplete: () => void
+    onComplete: () => void,
+    abortSignal?: AbortSignal
   ): Promise<void> => {
     try {
+      // Check if already aborted
+      if (abortSignal?.aborted) {
+        onComplete();
+        return;
+      }
+
       let parts: Part[] = [];
 
       // Process attachments
@@ -366,6 +373,12 @@ const geminiServiceImpl: GeminiService = {
       const result = await chat.sendMessageStream({ message: parts });
 
       for await (const chunkResponse of result) {
+        // Check abort signal on each chunk
+        if (abortSignal?.aborted) {
+          onComplete();
+          return;
+        }
+
         if (chunkResponse.candidates && chunkResponse.candidates[0]?.groundingMetadata) {
             onGroundingMetadata(chunkResponse.candidates[0].groundingMetadata);
         }
@@ -433,6 +446,55 @@ const geminiServiceImpl: GeminiService = {
       onComplete();
     }
   },
+};
+
+export const generateChatTitle = async (
+  firstMessage: string,
+  apiKey?: string
+): Promise<string> => {
+  const key = apiKey || ENV_API_KEY;
+  if (!key) return firstMessage.slice(0, 30) + (firstMessage.length > 30 ? '...' : '');
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': key,
+        },
+        body: JSON.stringify({
+          contents: [{
+            role: 'user',
+            parts: [{ 
+              text: `다음 메시지의 주제를 나타내는 짧은 제목(15자 이내, 한국어)을 만들어주세요. 제목만 출력하세요:\n\n"${firstMessage.slice(0, 200)}"` 
+            }]
+          }],
+          generationConfig: {
+            maxOutputTokens: 30,
+            temperature: 0.3
+          }
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      return firstMessage.slice(0, 30) + (firstMessage.length > 30 ? '...' : '');
+    }
+
+    const data = await response.json();
+    const title = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    
+    if (title && title.length > 0 && title.length <= 30) {
+      return title.replace(/^['"]|['"]$/g, ''); // 따옴표 제거
+    }
+    
+    return firstMessage.slice(0, 30) + (firstMessage.length > 30 ? '...' : '');
+  } catch (e) {
+    console.warn('Title generation failed:', e);
+    return firstMessage.slice(0, 30) + (firstMessage.length > 30 ? '...' : '');
+  }
 };
 
 export const geminiServiceInstance: GeminiService = geminiServiceImpl;

@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { ChatSession } from '../types';
-import { MessageSquare, Plus, Trash2, Edit2 } from 'lucide-react';
+import { MessageSquare, Plus, Trash2, Edit2, Download, Upload } from 'lucide-react';
 
 interface SidebarProps {
   sessions: ChatSession[];
@@ -10,6 +10,8 @@ interface SidebarProps {
   onCreateSession: () => void;
   onDeleteSession: (sessionId: string, e: React.MouseEvent) => void;
   onRenameSession: (sessionId: string, newTitle: string) => void;
+  onExportSessions: () => void;
+  onImportSessions: (sessions: ChatSession[]) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -18,11 +20,47 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectSession,
   onCreateSession,
   onDeleteSession,
-  onRenameSession
+  onRenameSession,
+  onExportSessions,
+  onImportSessions
 }) => {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const imported = JSON.parse(event.target?.result as string);
+        if (Array.isArray(imported)) {
+          // 날짜 문자열을 Date 객체로 변환
+          const processed = imported.map((s: any) => ({
+            ...s,
+            messages: s.messages.map((m: any) => ({
+              ...m,
+              timestamp: new Date(m.timestamp)
+            }))
+          }));
+          onImportSessions(processed);
+        } else {
+          alert('유효하지 않은 파일 형식입니다.');
+        }
+      } catch (err) {
+        alert('파일을 읽는 중 오류가 발생했습니다.');
+      }
+    };
+    reader.readAsText(file);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   useEffect(() => {
     if (editingSessionId && inputRef.current) {
@@ -65,7 +103,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
 
-        <div className="px-4 pt-4 pb-2">
+        <div className="px-4 pt-4 pb-2 space-y-2">
           <button
             onClick={onCreateSession}
             className="w-full flex items-center justify-center gap-2 p-2.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg transition-all shadow-lg shadow-sky-900/20 font-medium text-sm hover:translate-y-[-1px] active:translate-y-[0px]"
@@ -73,6 +111,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <Plus size={16} />
             새 채팅
           </button>
+          
+          <div className="flex gap-2">
+            <button
+              onClick={onExportSessions}
+              className="flex-1 flex items-center justify-center gap-1.5 p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-colors text-xs border border-slate-700"
+              title="모든 대화 내보내기"
+            >
+              <Download size={14} />
+              내보내기
+            </button>
+            <button
+              onClick={handleImportClick}
+              className="flex-1 flex items-center justify-center gap-1.5 p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-colors text-xs border border-slate-700"
+              title="대화 가져오기"
+            >
+              <Upload size={14} />
+              가져오기
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json"
+              onChange={handleFileChange}
+              className="hidden"
+            />
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1 custom-scrollbar">

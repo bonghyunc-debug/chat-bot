@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { Send, Loader2, Edit2, Paperclip, X, Image as ImageIcon, FileText, FileAudio, FileVideo, File } from 'lucide-react';
+import { Send, Edit2, Paperclip, X, FileText, FileAudio, FileVideo, File, Square, BookOpen, Mic, MicOff } from 'lucide-react';
 import { Attachment } from '../types';
 import { geminiServiceInstance } from '../services/geminiService';
 
@@ -12,6 +12,8 @@ interface ChatInputProps {
   isEditing: boolean;
   modelId: string;
   apiKey?: string;
+  onStopGeneration?: () => void;
+  onOpenPromptLibrary?: () => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
@@ -21,11 +23,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   isLoading,
   isEditing,
   modelId,
-  apiKey
+  apiKey,
+  onStopGeneration,
+  onOpenPromptLibrary
 }) => {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [tokenCount, setTokenCount] = useState<number | null>(null);
+  const [isListening, setIsListening] = useState(false);
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const recognitionRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -80,6 +87,70 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       abortController.abort();
     };
   }, [inputText, modelId, apiKey]);
+
+  // Speech Recognition Setup
+  useEffect(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    
+    if (SpeechRecognition) {
+      setSpeechSupported(true);
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'ko-KR';
+
+      recognition.onresult = (event: any) => {
+        let finalTranscript = '';
+        let interimTranscript = '';
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript;
+          } else {
+            interimTranscript += transcript;
+          }
+        }
+
+        if (finalTranscript) {
+          setInputText(prev => prev + finalTranscript);
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error('Speech recognition error:', event.error);
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognitionRef.current = recognition;
+    }
+
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+    };
+  }, [setInputText]);
+
+  const toggleSpeechRecognition = () => {
+    if (!recognitionRef.current) return;
+
+    if (isListening) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+    } else {
+      try {
+        recognitionRef.current.start();
+        setIsListening(true);
+      } catch (e) {
+        console.error('Failed to start speech recognition:', e);
+      }
+    }
+  };
 
   const processFiles = async (files: FileList | File[]) => {
     const newAttachments: Attachment[] = [];
@@ -263,13 +334,41 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             >
                 <PlusIconWithRing />
             </button>
-            <input 
-                type="file" 
-                ref={fileInputRef} 
-                onChange={handleFileSelect} 
+            <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileSelect}
                 multiple
-                className="hidden" 
+                className="hidden"
             />
+
+            {onOpenPromptLibrary && (
+              <button
+                type="button"
+                onClick={onOpenPromptLibrary}
+                className="p-2.5 text-slate-400 hover:text-amber-400 hover:bg-slate-800 rounded-xl transition-colors flex-shrink-0"
+                disabled={isLoading}
+                title="프롬프트 라이브러리"
+              >
+                <BookOpen size={18} />
+              </button>
+            )}
+
+            {speechSupported && (
+              <button
+                type="button"
+                onClick={toggleSpeechRecognition}
+                className={`p-2.5 rounded-xl transition-colors flex-shrink-0 ${
+                  isListening 
+                    ? 'text-red-400 bg-red-500/20 animate-pulse' 
+                    : 'text-slate-400 hover:text-sky-400 hover:bg-slate-800'
+                }`}
+                disabled={isLoading}
+                title={isListening ? '음성 입력 중지' : '음성 입력'}
+              >
+                {isListening ? <MicOff size={18} /> : <Mic size={18} />}
+              </button>
+            )}
 
             <textarea
                 ref={textareaRef}
@@ -285,7 +384,18 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             />
 
             <div className="flex flex-col justify-end pb-0.5">
-                 <button
+                {isLoading && onStopGeneration ? (
+                  <button
+                    type="button"
+                    onClick={onStopGeneration}
+                    className="p-2 rounded-xl flex-shrink-0 transition-all duration-200 flex items-center justify-center bg-red-600 hover:bg-red-500 text-white"
+                    style={{ width: '36px', height: '36px' }}
+                    title="생성 중단"
+                  >
+                    <Square size={14} fill="currentColor" />
+                  </button>
+                ) : (
+                  <button
                     type="submit"
                     disabled={isLoading || (!inputText.trim() && attachments.length === 0)}
                     className={`p-2 rounded-xl flex-shrink-0 transition-all duration-200 flex items-center justify-center ${
@@ -296,15 +406,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                             : 'bg-sky-600 hover:bg-sky-500 text-white'
                     }`}
                     style={{ width: '36px', height: '36px' }}
-                >
-                    {isLoading ? (
-                    <Loader2 size={16} className="animate-spin" />
-                    ) : isEditing ? (
-                    <Edit2 size={16} />
+                  >
+                    {isEditing ? (
+                      <Edit2 size={16} />
                     ) : (
-                    <Send size={16} className={inputText.trim() || attachments.length > 0 ? "translate-x-0.5" : ""} />
+                      <Send size={16} className={inputText.trim() || attachments.length > 0 ? "translate-x-0.5" : ""} />
                     )}
-                </button>
+                  </button>
+                )}
             </div>
           </div>
           

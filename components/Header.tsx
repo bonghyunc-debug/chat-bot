@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Settings, PanelRightClose, PanelRightOpen, SlidersHorizontal } from 'lucide-react'; 
+import { PanelRightClose, PanelRightOpen, SlidersHorizontal, BarChart2, Image } from 'lucide-react';
 
 interface HeaderProps {
   onClearChat: () => void;
@@ -11,6 +11,8 @@ interface HeaderProps {
   isCanvasOpen: boolean;
   onToggleCanvas: () => void;
   isControlPanelOpen?: boolean;
+  onOpenUsageStats?: () => void;
+  onOpenImageGallery?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -20,7 +22,9 @@ export const Header: React.FC<HeaderProps> = ({
   currentModelName,
   isCanvasOpen,
   onToggleCanvas,
-  isControlPanelOpen
+  isControlPanelOpen,
+  onOpenUsageStats,
+  onOpenImageGallery
 }) => {
   return (
     <header className="bg-slate-950/80 backdrop-blur-sm px-6 h-[60px] shadow-sm flex items-center justify-between z-10 border-b border-slate-800 shrink-0">
@@ -50,8 +54,28 @@ export const Header: React.FC<HeaderProps> = ({
 
         <div className="h-4 w-px bg-slate-800 mx-1"></div>
 
+        {onOpenUsageStats && (
+          <button
+            onClick={onOpenUsageStats}
+            className="p-2 rounded-lg transition-colors text-slate-400 hover:text-emerald-400 hover:bg-slate-800 border border-transparent"
+            title="토큰 사용량 통계"
+          >
+            <BarChart2 size={18} />
+          </button>
+        )}
+
+        {onOpenImageGallery && (
+          <button
+            onClick={onOpenImageGallery}
+            className="p-2 rounded-lg transition-colors text-slate-400 hover:text-purple-400 hover:bg-slate-800 border border-transparent"
+            title="이미지 갤러리"
+          >
+            <Image size={18} />
+          </button>
+        )}
+
         <button
-          onClick={onOpenSettingsModal} 
+          onClick={onOpenSettingsModal}
           className={`p-2 px-3 rounded-lg transition-colors flex items-center gap-2 border ${isControlPanelOpen ? 'bg-slate-800 text-sky-400 border-slate-700' : 'text-slate-400 hover:text-white hover:bg-slate-800 border-transparent'}`}
           disabled={isLoading}
           title="설정 및 파라미터"
