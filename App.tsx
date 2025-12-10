@@ -17,6 +17,10 @@ import { PromptLibrary } from './components/PromptLibrary';
 import { UsageStats } from './components/UsageStats';
 import { ImageGallery } from './components/ImageGallery';
 import { encryptApiKeys, decryptApiKeys } from './utils/crypto';
+import CompareMode from './components/CompareMode';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
+import { Terminal, X } from 'lucide-react';
 
 const App: React.FC = () => {
   // --- State: Sessions & Persistence ---
@@ -62,6 +66,7 @@ const App: React.FC = () => {
   const [isCodeModalOpen, setIsCodeModalOpen] = useState(false); // Code Export Modal State
   const [canvasContent, setCanvasContent] = useState<string>('');
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
+  const [isCompareModeOpen, setIsCompareModeOpen] = useState(false);
 
   // --- State: Current Session Settings (Active) ---
   // Initialize from LocalStorage if available, else defaults
@@ -114,6 +119,7 @@ const App: React.FC = () => {
   const [chatSession, setChatSession] = useState<Chat | null>(null);
   const [lastRequestPreview, setLastRequestPreview] = useState<PlaygroundRequestPreview | null>(null);
   const [lastUsage, setLastUsage] = useState<UsageMetadata | null>(null);
+  const [thinkingSidePanelContent, setThinkingSidePanelContent] = useState<string | null>(null);
 
   // Track the settings used to initialize the *current* chat object
   const [activeChatSettings, setActiveChatSettings] = useState<ChatSettings | null>(null);
@@ -659,14 +665,30 @@ const App: React.FC = () => {
     if (messageToEdit && messageToEdit.role === 'user') {
       setInputText(messageToEdit.content);
       setEditingMessageId(messageId);
-      // Remove this message and everything after it
+      
+      // 버전 히스토리 저장
       updateCurrentSessionMessages(prev => {
-          const index = prev.findIndex(m => m.id === messageId);
-          if (index !== -1) return prev.slice(0, index);
-          return prev;
+        const index = prev.findIndex(m => m.id === messageId);
+        if (index === -1) return prev;
+        
+        const editedMsg = prev[index];
+        const previousVersions = editedMsg.previousVersions || [];
+        
+        // 현재 버전을 히스토리에 추가
+        const newVersion = {
+          content: editedMsg.content,
+          timestamp: new Date()
+        };
+        
+        // 이전 버전들 + 현재 버전 (최대 10개 유지)
+        const updatedVersions = [...previousVersions, newVersion].slice(-10);
+        
+        // 해당 메시지 이후 모든 메시지 제거, 편집 메시지에 버전 히스토리 저장
+        const beforeMessages = prev.slice(0, index);
+        return beforeMessages;
       });
-      // Force re-init of chat context since history changed
-      setChatSession(null); 
+      
+      setChatSession(null);
     }
   };
   
@@ -783,6 +805,7 @@ const App: React.FC = () => {
           onOpenImageGallery={() => setIsImageGalleryOpen(true)}
           messages={currentMessages}
           onScrollToMessage={(id) => { const el = document.getElementById(`msg-${id}`); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }}
+          onOpenCompareMode={() => setIsCompareModeOpen(true)}
         />
 
         {modelsLoadingError && (
@@ -809,6 +832,11 @@ const App: React.FC = () => {
                         showThoughts={currentSettings.showThoughts}
                         onOpenCanvas={handleOpenCanvas}
                         isLoading={isLoading}
+                        modelId={currentSettings.modelId}
+                        onOpenThinkingSidePanel={(thoughts: string) => {
+                          setThinkingSidePanelContent(thoughts);
+                          setIsCanvasOpen(false);
+                        }}
                     />
                 </div>
                 
@@ -844,16 +872,40 @@ const App: React.FC = () => {
             )}
 
             {/* Canvas Panel */}
-            {isCanvasOpen && (
+            {isCanvasOpen && !thinkingSidePanelContent && (
                 <div className="w-1/2 border-l border-slate-800 h-full flex flex-col z-10 shadow-2xl bg-slate-900">
-                    <Canvas 
-                        content={canvasContent} 
-                        isOpen={isCanvasOpen} 
+                    <Canvas
+                        content={canvasContent}
+                        isOpen={isCanvasOpen}
                         onClose={() => setIsCanvasOpen(false)}
                         onUpdateContent={setCanvasContent}
                         onSendToChat={handleSendFromCanvas}
                     />
                 </div>
+            )}
+
+            {/* Thinking Side Panel */}
+            {thinkingSidePanelContent && (
+              <div className="w-1/2 border-l border-purple-900/50 h-full flex flex-col z-10 shadow-2xl bg-slate-950">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-purple-900/50 bg-purple-950/30">
+                  <div className="flex items-center gap-2">
+                    <Terminal size={16} className="text-purple-400" />
+                    <span className="text-sm font-bold text-purple-300">Thinking Process</span>
+                  </div>
+                  <button
+                    onClick={() => setThinkingSidePanelContent(null)}
+                    className="p-1.5 text-slate-400 hover:text-white rounded hover:bg-slate-800"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+                  <div 
+                    className="markdown-body text-slate-300"
+                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(marked.parse(thinkingSidePanelContent) as string) }}
+                  />
+                </div>
+              </div>
             )}
             
             {/* Code Export Modal */}
@@ -883,6 +935,14 @@ const App: React.FC = () => {
               isOpen={isImageGalleryOpen}
               onClose={() => setIsImageGalleryOpen(false)}
               sessions={sessions}
+            />
+
+            <CompareMode
+              isOpen={isCompareModeOpen}
+              onClose={() => setIsCompareModeOpen(false)}
+              baseSettings={currentSettings}
+              apiKey={getHealthyApiKey()}
+              availableModels={apiModels}
             />
         </div>
       </div>
