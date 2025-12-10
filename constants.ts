@@ -8,7 +8,7 @@ export const DEFAULT_SYSTEM_INSTRUCTION = "당신은 유용하고 친절한 AI �
 export const DEFAULT_TEMPERATURE = 0.7;
 export const DEFAULT_TOP_P = 0.95;
 export const DEFAULT_TOP_K = 40;
-export const DEFAULT_MAX_OUTPUT_TOKENS = 32768;
+export const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 
 // Default to TRUE as requested
 export const DEFAULT_SHOW_THOUGHTS = true;
