@@ -38,6 +38,14 @@ const geminiServiceImpl: GeminiService = {
         isVision: true,
       },
       {
+        id: 'gemini-2.5-pro',
+        name: 'Gemini 2.5 Pro',
+        description: '복잡한 문제 해결, 코드, 수학, STEM 추론에 최적화된 고급 사고 모델',
+        tags: ['Reasoning', 'Long Context', 'Stable'],
+        isReasoning: true,
+        isVision: true,
+      },
+      {
         id: 'gemini-2.5-flash-lite',
         name: 'Gemini 2.5 Flash Lite',
         description: '매우 빠른 속도와 비용 효율성을 중시하는 모델',
@@ -75,8 +83,10 @@ const geminiServiceImpl: GeminiService = {
         const dynamicModels = response.models
             .filter(m => {
                 const name = m.name?.toLowerCase() || '';
-                // Filter for Gemini 3 and 2.5 series only
-                return name.includes('gemini-3') || name.includes('gemini-2.5');
+                // Gemini 3, 2.5, 2.0 시리즈 포함 (1.5는 deprecated로 제외)
+                return name.includes('gemini-3') || 
+                       name.includes('gemini-2.5') || 
+                       name.includes('gemini-2.0');
             })
             .map(m => {
                 // Remove 'models/' prefix if present
@@ -175,6 +185,11 @@ const geminiServiceImpl: GeminiService = {
         thinkingLevel?: 'low' | 'medium' | 'high';
       }
 
+      // 이미지 모델은 최대 출력 토큰이 32,768로 제한됨
+      const effectiveMaxOutputTokens = isImageModel 
+        ? Math.min(settings.maxOutputTokens, 32768)
+        : settings.maxOutputTokens;
+
       const chatConfig: {
         systemInstruction?: string;
         temperature?: number;
@@ -192,7 +207,7 @@ const geminiServiceImpl: GeminiService = {
         temperature: settings.temperature,
         topP: settings.topP,
         topK: settings.topK,
-        maxOutputTokens: settings.maxOutputTokens,
+        maxOutputTokens: effectiveMaxOutputTokens,
         stopSequences: settings.stopSequences.length > 0 ? settings.stopSequences : undefined,
       };
 
@@ -239,11 +254,13 @@ const geminiServiceImpl: GeminiService = {
                  thinkingLevel: 'high' // Gemini 3 Pro 싱킹 레벨 High 고정
              };
           } else {
-             // 2.5 계열: 기존 budget 로직 유지 + includeThoughts 추가
-             let budget = 2048;
+             // 2.5 계열: Gemini 2.5 Pro는 더 높은 budget 지원
+             let budget = 8192;
 
-             if (modelId.includes('pro') || modelId.includes('thinking')) {
-                 budget = 4096;
+             if (modelId.includes('2.5-pro')) {
+                 budget = 16384; // Gemini 2.5 Pro는 더 긴 사고 가능
+             } else if (modelId.includes('pro') || modelId.includes('thinking')) {
+                 budget = 8192;
              }
 
              if (settings.maxOutputTokens) {

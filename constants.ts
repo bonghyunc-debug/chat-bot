@@ -8,7 +8,7 @@ export const DEFAULT_SYSTEM_INSTRUCTION = "당신은 유용하고 친절한 AI �
 export const DEFAULT_TEMPERATURE = 0.7;
 export const DEFAULT_TOP_P = 0.95;
 export const DEFAULT_TOP_K = 40;
-export const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
+export const DEFAULT_MAX_OUTPUT_TOKENS = 32768;
 
 // Default to TRUE as requested
 export const DEFAULT_SHOW_THOUGHTS = true;
@@ -166,6 +166,14 @@ export const MODEL_SPECS: Record<string, {
     capabilities: ['Vision', 'Google Search', 'Thinking (budget)', '빠른 응답'],
     limitations: []
   },
+  'gemini-2.5-pro': {
+    contextWindow: '1M tokens',
+    maxOutput: 65536,
+    inputPrice: 1.25,
+    outputPrice: 10.00,
+    capabilities: ['Thinking (budget)', 'Vision', 'Google Search', 'Code Execution', 'Long Context', '고품질 추론'],
+    limitations: []
+  },
   'gemini-2.5-flash-lite': {
     contextWindow: '1M tokens',
     maxOutput: 8192,
@@ -173,14 +181,6 @@ export const MODEL_SPECS: Record<string, {
     outputPrice: 0.075,
     capabilities: ['Vision', '초고속 응답', '저비용'],
     limitations: ['Google Search 미지원']
-  },
-  'gemini-2.5-pro': {
-    contextWindow: '1M tokens',
-    maxOutput: 8192,
-    inputPrice: 1.25,
-    outputPrice: 5.00,
-    capabilities: ['Vision', 'Google Search', 'Thinking', '고품질 추론'],
-    limitations: []
   },
   'gemini-3-pro-image-preview': {
     contextWindow: '1M tokens',
