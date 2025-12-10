@@ -88,9 +88,8 @@ const CopyDropdown: React.FC<{
       )}
     </div>
   );
-};
-
-interface MessageListProps {
+  };
+  interface MessageListProps {
   messages: ChatMessage[];
   onEditMessage: (messageId: string) => void;
   onRegenerate: () => void;
@@ -110,6 +109,42 @@ const renderMarkdown = (content: string) => {
   const cleanMarkup = DOMPurify.sanitize(rawMarkup as string);
   return { __html: cleanMarkup };
 };
+
+const AttachmentPreview: React.FC<{ att: Attachment }> = React.memo(({ att }) => {
+  if (att.category === 'image') {
+    return (
+      <div className="relative group overflow-hidden rounded-lg border border-slate-700">
+        <img 
+          src={`data:${att.mimeType};base64,${att.data}`} 
+          alt={att.name} 
+          className="max-h-64 w-full object-cover"
+        />
+        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+          <span className="text-xs text-white font-mono">{att.name}</span>
+        </div>
+      </div>
+    );
+  }
+
+  let Icon = File;
+  let label = 'File';
+  if (att.category === 'pdf') { Icon = FileText; label = 'PDF'; }
+  else if (att.category === 'audio') { Icon = FileAudio; label = 'AUDIO'; }
+  else if (att.category === 'video') { Icon = FileVideo; label = 'VIDEO'; }
+  else if (att.category === 'text') { Icon = FileText; label = 'TEXT'; }
+
+  return (
+    <div className="flex items-center gap-3 p-3 bg-slate-900/80 rounded-lg border border-slate-700 min-w-[200px]">
+      <div className="p-2 bg-slate-800 rounded text-sky-400">
+        <Icon size={20} />
+      </div>
+      <div className="flex flex-col min-w-0">
+        <span className="text-xs font-bold text-slate-300 truncate">{att.name}</span>
+        <span className="text-[10px] text-slate-500 font-mono uppercase">{label} • {att.mimeType.split('/').pop()}</span>
+      </div>
+    </div>
+  );
+});
 
 // --- Optimized Typewriter Component ---
 const Typewriter: React.FC<{ content: string; onUpdate?: () => void }> = ({ content, onUpdate }) => {
@@ -162,12 +197,12 @@ const Typewriter: React.FC<{ content: string; onUpdate?: () => void }> = ({ cont
   );
 };
 
-export const MessageList: React.FC<MessageListProps> = ({ 
-    messages, 
-    onEditMessage, 
-    onRegenerate, 
-    lastUserMessageId, 
-    showThoughts, 
+const MessageListInner: React.FC<MessageListProps> = ({
+    messages,
+    onEditMessage,
+    onRegenerate,
+    lastUserMessageId,
+    showThoughts,
     onOpenCanvas,
     isLoading
 }) => {
@@ -204,8 +239,15 @@ export const MessageList: React.FC<MessageListProps> = ({
   };
 
   useEffect(() => {
-    if (typeof hljs !== 'undefined') {
-      hljs.highlightAll();
+    if (typeof hljs !== 'undefined' && containerRef.current) {
+      // 마지막 메시지의 코드 블록만 하이라이팅
+      const lastMessage = containerRef.current.querySelector('[data-message]:last-child');
+      if (lastMessage) {
+        lastMessage.querySelectorAll('pre code:not([data-highlighted])').forEach((block) => {
+          hljs.highlightElement(block as HTMLElement);
+          block.setAttribute('data-highlighted', 'true');
+        });
+      }
     }
   }, [messages, showThoughts]);
 
@@ -229,42 +271,6 @@ export const MessageList: React.FC<MessageListProps> = ({
       if (bottomRef.current && shouldAutoScrollRef.current) {
           bottomRef.current.scrollIntoView({ behavior: 'auto', block: 'end' });
       }
-  };
-
-  const renderAttachment = (att: Attachment) => {
-      if (att.category === 'image') {
-          return (
-              <div key={att.id} className="relative group overflow-hidden rounded-lg border border-slate-700">
-                  <img 
-                    src={`data:${att.mimeType};base64,${att.data}`} 
-                    alt={att.name} 
-                    className="max-h-64 w-full object-cover"
-                  />
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                      <span className="text-xs text-white font-mono">{att.name}</span>
-                  </div>
-              </div>
-          );
-      }
-
-      let Icon = File;
-      let label = 'File';
-      if (att.category === 'pdf') { Icon = FileText; label = 'PDF'; }
-      else if (att.category === 'audio') { Icon = FileAudio; label = 'AUDIO'; }
-      else if (att.category === 'video') { Icon = FileVideo; label = 'VIDEO'; }
-      else if (att.category === 'text') { Icon = FileText; label = 'TEXT'; }
-
-      return (
-          <div key={att.id} className="flex items-center gap-3 p-3 bg-slate-900/80 rounded-lg border border-slate-700 min-w-[200px]">
-              <div className="p-2 bg-slate-800 rounded text-sky-400">
-                  <Icon size={20} />
-              </div>
-              <div className="flex flex-col min-w-0">
-                  <span className="text-xs font-bold text-slate-300 truncate">{att.name}</span>
-                  <span className="text-[10px] text-slate-500 font-mono uppercase">{label} • {att.mimeType.split('/').pop()}</span>
-              </div>
-          </div>
-      );
   };
 
   return (
@@ -293,6 +299,7 @@ export const MessageList: React.FC<MessageListProps> = ({
         <div
           key={msg.id}
           id={`msg-${msg.id}`}
+          data-message={msg.id}
           className={`group max-w-4xl mx-auto w-full flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
         >
           {/* Label Row */}
@@ -318,7 +325,7 @@ export const MessageList: React.FC<MessageListProps> = ({
             {/* User Attachments (Grid Layout) */}
             {isUser && msg.attachments && msg.attachments.length > 0 && (
               <div className="mb-4 flex flex-wrap gap-2">
-                {msg.attachments.map(att => renderAttachment(att))}
+                {msg.attachments.map(att => <AttachmentPreview key={att.id} att={att} />)}
               </div>
             )}
 
@@ -508,3 +515,5 @@ export const MessageList: React.FC<MessageListProps> = ({
     </div>
   );
 };
+
+export const MessageList = React.memo(MessageListInner);

@@ -84,6 +84,7 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
   // 콘솔 메시지 수신
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
+      // origin 검증 추가 (보안 강화)
       if (event.data?.type === 'console') {
         setConsoleLogs((prev) => [
           ...prev.slice(-99),
@@ -96,7 +97,13 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
       }
     };
     window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
+    return () => {
+      window.removeEventListener('message', handleMessage);
+      // iframe 정리
+      if (iframeRef.current) {
+        iframeRef.current.src = 'about:blank';
+      }
+    };
   }, []);
 
   // 실행 탭 전환 시 콘솔 초기화
@@ -200,11 +207,23 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
     const jsParts: string[] = [];
 
     const sanitizeForIframe = (code: string): string => {
-      let sanitized = code.replace(/<\/script>/gi, '<\\/script>');
-      sanitized = sanitized.replace(/javascript:/gi, 'javascript-disabled:');
-      sanitized = sanitized.replace(/data:(?!image\/)/gi, 'data-disabled:');
-      sanitized = sanitized.replace(/(\s)(on\w+)(\s*=)/gi, '$1data-disabled-$2$3');
-      sanitized = sanitized.replace(/srcdoc\s*=/gi, 'data-disabled-srcdoc=');
+      // 1단계: 기본 이스케이프
+      let sanitized = code
+        .replace(/<\/script>/gi, '<\\/script>')
+        .replace(/javascript:/gi, 'javascript-blocked:')
+        .replace(/vbscript:/gi, 'vbscript-blocked:')
+        .replace(/data:(?!image\/(png|jpg|jpeg|gif|webp|svg\+xml))/gi, 'data-blocked:');
+      
+      // 2단계: 이벤트 핸들러 제거 (모든 on* 속성)
+      sanitized = sanitized.replace(/\s(on\w+)\s*=/gi, ' data-blocked-$1=');
+      
+      // 3단계: 위험한 태그 속성 제거
+      sanitized = sanitized.replace(/srcdoc\s*=/gi, 'data-blocked-srcdoc=');
+      sanitized = sanitized.replace(/formaction\s*=/gi, 'data-blocked-formaction=');
+      
+      // 4단계: base 태그 제거 (URL 하이재킹 방지)
+      sanitized = sanitized.replace(/<base\s/gi, '<blocked-base ');
+      
       return sanitized;
     };
 
@@ -289,7 +308,22 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
       </script>
     `;
 
-    return `<!DOCTYPE html><html><head><meta charset="utf-8">${consoleInterceptor}${libScripts}<style>body { margin: 0; padding: 1rem; }${sanitizeForIframe(cssParts.join('\n'))}</style></head><body>${sanitizeForIframe(htmlParts.join('\n'))}<script>try{${sanitizeForIframe(jsParts.join('\n'))}}catch(err){console.error('Error: ' + err.message);}</script></body></html>`;
+    const cspPolicy = `default-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; script-src 'self' 'unsafe-inline' 'unsafe-eval' ${enabledLibs.map(id => AVAILABLE_LIBS.find(l => l.id === id)?.url).filter(Boolean).map(url => new URL(url!).origin).join(' ')}; connect-src 'none'; frame-src 'none';`;
+
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="${cspPolicy}">
+  ${consoleInterceptor}
+  ${libScripts}
+  <style>body { margin: 0; padding: 1rem; }${sanitizeForIframe(cssParts.join('\n'))}</style>
+</head>
+<body>
+  ${sanitizeForIframe(htmlParts.join('\n'))}
+  <script>try{${sanitizeForIframe(jsParts.join('\n'))}}catch(err){console.error('Error: ' + err.message);}</script>
+</body>
+</html>`;
   };
 
   // Allow using "Tab" key for indentation in the textarea

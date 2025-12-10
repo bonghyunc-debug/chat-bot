@@ -132,6 +132,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     return () => {
       if (recognitionRef.current) {
         recognitionRef.current.stop();
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onend = null;
+        recognitionRef.current = null;
       }
     };
   }, [setInputText]);

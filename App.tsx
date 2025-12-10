@@ -16,6 +16,7 @@ import { PlaygroundInspector, PlaygroundRequestPreview } from './components/Play
 import { PromptLibrary } from './components/PromptLibrary';
 import { UsageStats } from './components/UsageStats';
 import { ImageGallery } from './components/ImageGallery';
+import { encryptApiKeys, decryptApiKeys } from './utils/crypto';
 
 const App: React.FC = () => {
   // --- State: Sessions & Persistence ---
@@ -38,8 +39,18 @@ const App: React.FC = () => {
   // --- State: API Keys Management ---
   const [apiKeys, setApiKeys] = useState<string[]>(() => {
       try {
-          const saved = localStorage.getItem('gemini_api_keys');
-          return saved ? JSON.parse(saved) : [];
+          const saved = localStorage.getItem('gemini_api_keys_enc');
+          if (saved) {
+              return decryptApiKeys(saved);
+          }
+          // 기존 평문 데이터 마이그레이션
+          const legacy = localStorage.getItem('gemini_api_keys');
+          if (legacy) {
+              const keys = JSON.parse(legacy);
+              localStorage.removeItem('gemini_api_keys');
+              return Array.isArray(keys) ? keys : [];
+          }
+          return [];
       } catch (e) {
           return [];
       }
@@ -131,7 +142,7 @@ const App: React.FC = () => {
 
   // Save API Keys to LocalStorage
   useEffect(() => {
-    localStorage.setItem('gemini_api_keys', JSON.stringify(apiKeys));
+    localStorage.setItem('gemini_api_keys_enc', encryptApiKeys(apiKeys));
   }, [apiKeys]);
 
   // Save Global Settings to LocalStorage whenever they change
