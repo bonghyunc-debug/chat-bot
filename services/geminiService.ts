@@ -2,6 +2,7 @@
 import { GoogleGenAI, Chat, Part, GroundingMetadata } from "@google/genai";
 import { GeminiService, ChatHistoryItem, ThoughtSupportingPart, ModelOption, ChatSettings, Attachment, UsageMetadata } from '../types';
 import { reportApiKeyError } from './apiKeyPool';
+import { GeminiServiceError, parseGeminiError } from './errors';
 
 // Default env key as fallback (supports Vite and Node-style envs)
 const ENV_API_KEY =
@@ -415,33 +416,14 @@ const geminiServiceImpl: GeminiService = {
       }
     } catch (error: any) {
       console.error("Error sending message to Gemini:", error);
-      
+
       const usedKey = (chat as any)._apiKey;
       if (usedKey) {
           reportApiKeyError(usedKey);
       }
 
-      let customError = error;
-      const errorStr = error.message || String(error);
-      const errorJsonStr = JSON.stringify(error);
-
-      if (errorStr.includes('503') || errorStr.includes('overloaded') || errorJsonStr.includes('503')) {
-        customError = new Error("현재 모델 사용량이 많아 응답할 수 없습니다 (503). 잠시 후 다시 시도하거나, 더 빠른 'Flash' 모델로 변경해 보세요.");
-      } else if (errorStr.includes('429')) {
-        customError = new Error("요청 한도를 초과했습니다 (429). 잠시 후 다시 시도하세요.");
-      } else if (errorStr.includes('SAFETY')) {
-        customError = new Error("안전 필터에 의해 응답이 차단되었습니다.");
-      } else if (errorStr.includes('Recitation')) {
-        customError = new Error("저작권/암기 관련 문제로 응답이 차단되었습니다.");
-      } else if (errorStr.includes('API key')) {
-         customError = new Error("유효하지 않은 API 키입니다. 설정 패널을 확인하세요.");
-      }
-
-      if (customError instanceof Error) {
-        onError(customError);
-      } else {
-        onError(new Error(errorStr));
-      }
+      const geminiError = parseGeminiError(error);
+      onError(new Error(geminiError.userMessage));
     } finally {
       onComplete();
     }

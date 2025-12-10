@@ -1,5 +1,5 @@
 
-import { ModelOption, ChatSettings, SystemPromptPreset, ToolSettings } from './types';
+import { ModelOption, ChatSettings, SystemPromptPreset, ToolSettings, SafetyThreshold } from './types';
 
 // Updated default model to Gemini 3.0 Pro Preview
 export const DEFAULT_MODEL_ID = 'gemini-3-pro-preview'; 
@@ -17,7 +17,7 @@ export const DEFAULT_SHOW_THOUGHTS = true;
 export const DEFAULT_USE_GOOGLE_SEARCH = true;
 
 export const DEFAULT_JSON_MODE = false;
-export const DEFAULT_SAFETY_SETTING = 'BLOCK_MEDIUM_AND_ABOVE'; 
+export const DEFAULT_SAFETY_SETTING: SafetyThreshold = 'BLOCK_MEDIUM_AND_ABOVE';
 export const DEFAULT_STOP_SEQUENCES: string[] = [];
 
 export const DEFAULT_TOOL_SETTINGS: ToolSettings = {

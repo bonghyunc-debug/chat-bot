@@ -3,12 +3,25 @@ import { Chat, Part, GroundingMetadata } from "@google/genai";
 
 export type CopyFormat = 'plain' | 'markdown' | 'html';
 
+// 안전 설정 타입
+export type SafetyThreshold = 
+  | 'BLOCK_NONE' 
+  | 'BLOCK_LOW_AND_ABOVE' 
+  | 'BLOCK_MEDIUM_AND_ABOVE' 
+  | 'BLOCK_ONLY_HIGH';
+
+// 메시지 역할 타입
+export type MessageRole = 'user' | 'model' | 'error';
+
+// 첨부 파일 카테고리 타입
+export type AttachmentCategory = 'image' | 'video' | 'audio' | 'pdf' | 'text';
+
 export interface Attachment {
   id: string;
   name: string;
   mimeType: string;
   data: string; // Base64 string for binary, raw string for text
-  category: 'image' | 'video' | 'audio' | 'pdf' | 'text';
+  category: AttachmentCategory;
 }
 
 export interface UsageMetadata {
@@ -19,10 +32,10 @@ export interface UsageMetadata {
 
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'model' | 'error';
+  role: MessageRole;
   content: string;
   timestamp: Date;
-  thoughts?: string; 
+  thoughts?: string;
   groundingMetadata?: GroundingMetadata;
   usageMetadata?: UsageMetadata; // Token usage info
   isLoading?: boolean;
@@ -102,7 +115,7 @@ export interface ChatSettings {
   showThoughts: boolean;
   useGoogleSearch: boolean;
   jsonMode: boolean; // For responseMimeType: application/json
-  safetySettings: string; // Simplified for UI: 'BLOCK_NONE' | 'BLOCK_ONLY_HIGH' etc.
+  safetySettings: SafetyThreshold; // Simplified for UI: 'BLOCK_NONE' | 'BLOCK_ONLY_HIGH' etc.
   stopSequences: string[];
   toolSettings?: ToolSettings;
 }
