@@ -1,5 +1,5 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { ChatSession } from '../types';
 import { MessageSquare, Plus, Trash2, Edit2, Download, Upload } from 'lucide-react';
 
@@ -94,6 +94,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
+  // 세션 목록 정렬 메모이제이션
+  const sortedSessions = useMemo(() => 
+    [...sessions].sort((a, b) => b.lastModified - a.lastModified),
+    [sessions]
+  );
+
   return (
     <aside className="flex flex-col h-full w-72 bg-slate-950/50 backdrop-blur-xl border-r border-slate-800 shrink-0">
         <div className="p-5 flex items-center justify-between border-b border-slate-800/50 h-[60px]">
@@ -146,7 +152,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
           )}
           
-          {[...sessions].sort((a, b) => b.lastModified - a.lastModified).map((session) => (
+          {sortedSessions.map((session) => (
             <div
               key={session.id}
               onClick={() => { 

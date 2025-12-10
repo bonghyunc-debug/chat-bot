@@ -1,5 +1,5 @@
 
-import React, { useRef, useState, useCallback, useEffect } from 'react';
+import React, { useRef, useState, useCallback, useEffect, useMemo } from 'react';
 import { Send, Edit2, Paperclip, X, FileText, FileAudio, FileVideo, File, Square, BookOpen, Mic, MicOff } from 'lucide-react';
 import { Attachment } from '../types';
 import { geminiServiceInstance } from '../services/geminiService';
@@ -35,6 +35,21 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const recognitionRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const textExtensions = useMemo(() => ['js', 'jsx', 'ts', 'tsx', 'py', 'java', 'c', 'cpp', 'html', 'css', 'json', 'md', 'txt', 'csv', 'xml', 'yaml', 'yml'], []);
+
+  // 파일 카테고리 판별 (메모이제이션)
+  const getFileCategory = useCallback((file: File): Attachment['category'] => {
+    if (file.type.startsWith('image/')) return 'image';
+    if (file.type.startsWith('audio/')) return 'audio';
+    if (file.type.startsWith('video/')) return 'video';
+    if (file.type === 'application/pdf') return 'pdf';
+    
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    if (ext && textExtensions.includes(ext)) return 'text';
+    
+    return 'text';
+  }, []);
 
   // Auto-resize textarea effect
   useEffect(() => {
@@ -156,23 +171,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
   };
 
-  const processFiles = async (files: FileList | File[]) => {
+  const processFiles = useCallback(async (files: FileList | File[]) => {
     const newAttachments: Attachment[] = [];
 
     for (const file of Array.from(files)) {
-      // Basic category detection
-      let category: Attachment['category'] = 'text';
-      if (file.type.startsWith('image/')) category = 'image';
-      else if (file.type.startsWith('audio/')) category = 'audio';
-      else if (file.type.startsWith('video/')) category = 'video';
-      else if (file.type === 'application/pdf') category = 'pdf';
-      else {
-          // Check extensions for common text/code files if type is empty or generic
-          const ext = file.name.split('.').pop()?.toLowerCase();
-          if (ext && ['js', 'jsx', 'ts', 'tsx', 'py', 'java', 'c', 'cpp', 'html', 'css', 'json', 'md', 'txt', 'csv', 'xml', 'yaml', 'yml'].includes(ext)) {
-              category = 'text';
-          }
-      }
+      const category = getFileCategory(file);
 
       try {
         let data = '';
@@ -201,7 +204,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
 
     setAttachments(prev => [...prev, ...newAttachments]);
-  };
+  }, [getFileCategory]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
