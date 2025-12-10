@@ -125,16 +125,16 @@ export interface GeminiService {
     modelId: string,
     settings: ChatSettings,
     history?: ChatHistoryItem[],
-    apiKey?: string 
+    apiKey?: string
   ) => Promise<Chat | null>;
   sendMessageStream: (
     chat: Chat,
     message: string,
-    attachments: Attachment[], // Updated to support array of attachments
+    attachments: Attachment[],
     onChunk: (chunk: string) => void,
     onThoughtChunk: (chunk: string) => void,
     onGroundingMetadata: (metadata: GroundingMetadata) => void,
-    onUsageMetadata: (usage: UsageMetadata) => void, // New callback
+    onUsageMetadata: (usage: UsageMetadata) => void,
     onImageGenerated: (image: { data: string; mimeType: string }) => void,
     onError: (error: Error) => void,
     onComplete: () => void,
@@ -142,6 +142,25 @@ export interface GeminiService {
   ) => Promise<void>;
   getAvailableModels: (apiKey?: string) => Promise<ModelOption[]>;
   countTokens: (modelId: string, apiKey: string | undefined, contents: any[]) => Promise<number | null>;
+}
+
+// 스트림 콜백 옵션 타입 (향후 리팩토링용)
+export interface StreamCallbackOptions {
+  onChunk: (chunk: string) => void;
+  onThoughtChunk?: (chunk: string) => void;
+  onGroundingMetadata?: (metadata: GroundingMetadata) => void;
+  onUsageMetadata?: (usage: UsageMetadata) => void;
+  onImageGenerated?: (image: { data: string; mimeType: string }) => void;
+  onError: (error: Error) => void;
+  onComplete: () => void;
+}
+
+export interface StreamRequestOptions {
+  chat: Chat;
+  message: string;
+  attachments: Attachment[];
+  callbacks: StreamCallbackOptions;
+  abortSignal?: AbortSignal;
 }
 
 export interface ThoughtSupportingPart extends Part {
@@ -157,3 +176,44 @@ export interface PromptTemplate {
   category?: string;
   createdAt: number;
 }
+
+// ============ 타입 가드 함수 ============
+
+export const isUserMessage = (msg: ChatMessage): boolean => {
+  return msg.role === 'user';
+};
+
+export const isModelMessage = (msg: ChatMessage): boolean => {
+  return msg.role === 'model';
+};
+
+export const isErrorMessage = (msg: ChatMessage): boolean => {
+  return msg.role === 'error';
+};
+
+export const hasAttachments = (msg: ChatMessage): msg is ChatMessage & { attachments: Attachment[] } => {
+  return Array.isArray(msg.attachments) && msg.attachments.length > 0;
+};
+
+export const hasModelAttachment = (msg: ChatMessage): msg is ChatMessage & { modelAttachment: { data: string; mimeType: string } } => {
+  return msg.modelAttachment !== undefined && msg.modelAttachment !== null;
+};
+
+export const hasGroundingMetadata = (msg: ChatMessage): boolean => {
+  return msg.groundingMetadata !== undefined && 
+         msg.groundingMetadata.groundingChunks !== undefined &&
+         msg.groundingMetadata.groundingChunks.length > 0;
+};
+
+export const hasUsageMetadata = (msg: ChatMessage): msg is ChatMessage & { usageMetadata: UsageMetadata } => {
+  return msg.usageMetadata !== undefined;
+};
+
+export const isImageAttachment = (att: Attachment): boolean => {
+  return att.category === 'image';
+};
+
+export const isValidApiKey = (key: string): boolean => {
+  // Gemini API 키 형식: AIza로 시작하는 39자
+  return /^AIza[0-9A-Za-z_-]{35}$/.test(key);
+};

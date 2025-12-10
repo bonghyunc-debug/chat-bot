@@ -97,3 +97,47 @@ export const SYSTEM_PROMPT_PRESETS: SystemPromptPreset[] = [
     instruction: 'You are an expert summarizer. Produce structured bullet point summaries and highlight key decisions or takeaways.',
   }
 ];
+
+// ============ UI 상수 ============
+
+export const UI_CONSTANTS = {
+  // 타이머/딜레이
+  DEBOUNCE_DELAY: 400,
+  COPY_FEEDBACK_DURATION: 1500,
+  APPLY_FEEDBACK_DURATION: 2000,
+  AUTOSAVE_DELAY: 2000,
+  
+  // 크기 제한
+  MAX_TITLE_LENGTH: 30,
+  MAX_CONSOLE_LOGS: 100,
+  MAX_HISTORY_ITEMS: 50,
+  
+  // 스크롤
+  SCROLL_THRESHOLD: 100,
+  
+  // 토큰
+  TOKEN_COUNT_DEBOUNCE: 400,
+  
+  // 애니메이션
+  TYPEWRITER_INTERVAL: 15,
+  TYPEWRITER_STEP_LARGE: 10,
+  TYPEWRITER_STEP_MEDIUM: 5,
+  TYPEWRITER_STEP_SMALL: 3,
+  TYPEWRITER_STEP_MIN: 2,
+} as const;
+
+export const STORAGE_KEYS = {
+  SESSIONS: 'gemini_chat_sessions',
+  API_KEYS_ENCRYPTED: 'gemini_api_keys_enc',
+  API_KEYS_LEGACY: 'gemini_api_keys',
+  GLOBAL_SETTINGS: 'gemini_global_settings',
+  PROMPT_TEMPLATES: 'prompt_templates',
+  CANVAS_AUTOSAVE: 'canvas_autosave',
+} as const;
+
+export const ERROR_MESSAGES = {
+  SESSION_INIT_FAILED: '모델 초기화에 실패했습니다. API 키나 네트워크 상태를 확인해주세요.',
+  CONNECTION_LOST: '연결이 끊어졌습니다. 새로고침 해주세요.',
+  NETWORK_OFFLINE: '네트워크 연결을 확인해주세요.',
+  GENERATION_STOPPED: '[생성 중단됨]',
+} as const;
