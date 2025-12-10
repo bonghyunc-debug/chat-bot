@@ -6,6 +6,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { calculateCost } from '../utils/pricing';
 import ThinkingDisplay from './ThinkingDisplay';
+import CodeBlock from './CodeBlock';
 
 // Declare hljs from window (loaded in index.html)
 declare const hljs: any;
@@ -112,6 +113,59 @@ const renderMarkdown = (content: string) => {
   const rawMarkup = marked.parse(content);
   const cleanMarkup = DOMPurify.sanitize(rawMarkup as string);
   return { __html: cleanMarkup };
+};
+
+const renderMarkdownWithCodeBlocks = (
+  content: string,
+  onOpenCanvas: (code: string) => void
+): React.ReactNode => {
+  const codeBlockRegex = /```(\w*)\n?([\s\S]*?)```/g;
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match;
+  let keyIndex = 0;
+
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      const textBefore = content.slice(lastIndex, match.index);
+      const html = DOMPurify.sanitize(marked.parse(textBefore) as string);
+      parts.push(
+        <div
+          key={`text-${keyIndex++}`}
+          className="markdown-body"
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      );
+    }
+
+    const language = match[1] || 'plaintext';
+    const code = match[2].trim();
+    parts.push(
+      <CodeBlock
+        key={`code-${keyIndex++}`}
+        code={code}
+        language={language}
+        onOpenInCanvas={onOpenCanvas}
+        showLineNumbers={code.split('\n').length > 5}
+      />
+    );
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < content.length) {
+    const textAfter = content.slice(lastIndex);
+    const html = DOMPurify.sanitize(marked.parse(textAfter) as string);
+    parts.push(
+      <div
+        key={`text-${keyIndex++}`}
+        className="markdown-body"
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    );
+  }
+
+  return <>{parts}</>;
 };
 
 const AttachmentPreview: React.FC<{ att: Attachment }> = React.memo(({ att }) => {
@@ -271,10 +325,9 @@ const MessageItem = React.memo<MessageItemProps>(({
                   onUpdate={isLastMessage ? onTypewriterUpdate : undefined}
                 />
               ) : (
-                <div
-                  className="text-[15px] markdown-body"
-                  dangerouslySetInnerHTML={renderMarkdown(msg.content || '')}
-                />
+                <div className="text-[15px]">
+                  {renderMarkdownWithCodeBlocks(msg.content || '', onOpenCanvas)}
+                </div>
               )}
             </>
           ) : (
