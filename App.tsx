@@ -703,10 +703,44 @@ const App: React.FC = () => {
     }
   };
 
-  const getCurrentModelDisplayName = () => {
-     const model = apiModels.find(m => m.id === currentSettings.modelId);
-     return model ? model.name : currentSettings.modelId;
-  };
+  // 키보드 단축키 지원
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl/Cmd + N: 새 채팅
+      if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
+        e.preventDefault();
+        createNewSession();
+      }
+      // Ctrl/Cmd + /: 설정 패널 토글
+      if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+        e.preventDefault();
+        setIsControlPanelOpen(prev => !prev);
+      }
+      // Ctrl/Cmd + Shift + C: 캔버스 토글
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'C') {
+        e.preventDefault();
+        setIsCanvasOpen(prev => !prev);
+      }
+      // Ctrl/Cmd + Shift + S: 사용량 통계
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'S') {
+        e.preventDefault();
+        setIsUsageStatsOpen(true);
+      }
+      // Escape: 모달/패널 닫기
+      if (e.key === 'Escape') {
+        if (isCodeModalOpen) setIsCodeModalOpen(false);
+        else if (isPromptLibraryOpen) setIsPromptLibraryOpen(false);
+        else if (isUsageStatsOpen) setIsUsageStatsOpen(false);
+        else if (isImageGalleryOpen) setIsImageGalleryOpen(false);
+        else if (isCanvasOpen) setIsCanvasOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isCodeModalOpen, isPromptLibraryOpen, isUsageStatsOpen, isImageGalleryOpen, isCanvasOpen]);
+
+  const getCurrentModelDisplayName = () => { const model = apiModels.find(m => m.id === currentSettings.modelId); return model ? model.name : currentSettings.modelId; };
 
   return (
     <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
@@ -736,6 +770,8 @@ const App: React.FC = () => {
           isControlPanelOpen={isControlPanelOpen}
           onOpenUsageStats={() => setIsUsageStatsOpen(true)}
           onOpenImageGallery={() => setIsImageGalleryOpen(true)}
+          messages={currentMessages}
+          onScrollToMessage={(id) => { const el = document.getElementById(`msg-${id}`); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }}
         />
 
         {modelsLoadingError && (

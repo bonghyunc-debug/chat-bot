@@ -379,8 +379,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 placeholder={attachments.length > 0 ? "파일에 대해 물어보세요..." : "메시지 입력..."}
                 className="flex-grow py-2.5 px-3 bg-transparent border-0 focus:ring-0 text-slate-200 placeholder-slate-500 resize-none overflow-y-auto text-sm leading-relaxed custom-scrollbar"
                 rows={1}
-                style={{minHeight: '42px', maxHeight: '200px'}} 
+                style={{minHeight: '42px', maxHeight: '200px'}}
                 disabled={isLoading}
+                aria-label="메시지 입력"
+                aria-describedby="input-hint"
             />
 
             <div className="flex flex-col justify-end pb-0.5">
@@ -418,10 +420,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           </div>
           
           <div className="px-4 py-1.5 bg-slate-950/30 flex justify-between items-center text-[10px] text-slate-500 border-t border-slate-800/50">
-             <span>Shift + Enter 줄바꿈</span>
+             <span id="input-hint">Shift+Enter 줄바꿈 • Ctrl+N 새채팅 • Ctrl+/ 설정</span>
              <span className="font-mono">
-                {tokenCount !== null 
-                    ? `Input: ${tokenCount.toLocaleString()} tokens` 
+                {tokenCount !== null
+                    ? `Input: ${tokenCount.toLocaleString()} tokens`
                     : 'Input: -'}
              </span>
           </div>
