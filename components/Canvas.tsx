@@ -43,6 +43,9 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
   const [consoleLogs, setConsoleLogs] = useState<Array<{ type: string; message: string; timestamp: number }>>([]);
   const [showConsole, setShowConsole] = useState(false);
   const [enabledLibs, setEnabledLibs] = useState<string[]>(['tailwind']);
+  const [highlightedHtml, setHighlightedHtml] = useState<string>('');
+  const editorRef = useRef<HTMLDivElement>(null);
+  const [cursorPosition, setCursorPosition] = useState<number>(0);
   const AVAILABLE_LIBS = [
     { id: 'tailwind', name: 'Tailwind CSS', url: 'https://cdn.tailwindcss.com' },
     { id: 'alpine', name: 'Alpine.js', url: 'https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js', defer: true },
@@ -63,6 +66,8 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
   const [historyIndex, setHistoryIndex] = useState(0);
   const isUndoRedo = useRef(false);
   const AUTOSAVE_KEY = 'canvas_autosave';
+  const [executionTime, setExecutionTime] = useState<number | null>(null);
+  const iframeLoadTimeRef = useRef<number>(0);
 
   // Trigger syntax highlighting when switching to preview mode or when content changes
   useEffect(() => {
@@ -80,6 +85,31 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
       }
     };
   }, [activeTab]);
+
+  useEffect(() => {
+    if (typeof hljs === 'undefined') {
+      setHighlightedHtml(content.replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+      return;
+    }
+
+    let language = 'plaintext';
+    const firstLine = content.split('\n')[0].trim();
+
+    if (firstLine.startsWith('<!DOCTYPE') || firstLine.startsWith('<html')) {
+      language = 'html';
+    } else if (firstLine.startsWith('import ') || firstLine.startsWith('const ') || firstLine.startsWith('function ')) {
+      language = 'javascript';
+    } else if (firstLine.startsWith('def ') || firstLine.startsWith('import ') || firstLine.startsWith('class ')) {
+      language = 'python';
+    }
+
+    try {
+      const result = hljs.highlight(content, { language, ignoreIllegals: true });
+      setHighlightedHtml(result.value);
+    } catch {
+      setHighlightedHtml(content.replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+    }
+  }, [content]);
 
   // 콘솔 메시지 수신
   useEffect(() => {
@@ -106,12 +136,14 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
     };
   }, []);
 
-  // 실행 탭 전환 시 콘솔 초기화
+  // 실행 탭 전환 시 콘솔 초기화 및 실행 시간 측정 시작
   useEffect(() => {
     if (activeTab === 'run') {
       setConsoleLogs([]);
+      iframeLoadTimeRef.current = performance.now();
+      setExecutionTime(null);
     }
-  }, [activeTab, content]);
+  }, [activeTab, content, enabledLibs]);
 
   // 콘텐츠 변경 시 히스토리 추가
   useEffect(() => {
@@ -285,24 +317,80 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
     const consoleInterceptor = `
       <script>
         (function() {
-          const originalConsole = { log: console.log, error: console.error, warn: console.warn, info: console.info };
+          const originalConsole = { 
+            log: console.log, 
+            error: console.error, 
+            warn: console.warn, 
+            info: console.info,
+            debug: console.debug,
+            table: console.table
+          };
+          
+          const formatValue = (val, depth = 0) => {
+            if (depth > 3) return '[...]';
+            if (val === null) return 'null';
+            if (val === undefined) return 'undefined';
+            if (typeof val === 'function') return '[Function: ' + (val.name || 'anonymous') + ']';
+            if (typeof val === 'symbol') return val.toString();
+            if (Array.isArray(val)) {
+              if (val.length === 0) return '[]';
+              if (depth > 2) return '[Array(' + val.length + ')]';
+              return '[' + val.map(v => formatValue(v, depth + 1)).join(', ') + ']';
+            }
+            if (typeof val === 'object') {
+              try {
+                const keys = Object.keys(val);
+                if (keys.length === 0) return '{}';
+                if (depth > 1) return '{...}';
+                return '{' + keys.slice(0, 5).map(k => k + ': ' + formatValue(val[k], depth + 1)).join(', ') + (keys.length > 5 ? ', ...' : '') + '}';
+              } catch {
+                return '[Object]';
+              }
+            }
+            if (typeof val === 'string') return depth > 0 ? '"' + val + '"' : val;
+            return String(val);
+          };
+          
           const sendToParent = (type, args) => {
             try {
+              const message = Array.from(args).map(a => formatValue(a)).join(' ');
               window.parent.postMessage({ 
                 type: 'console', 
                 logType: type, 
-                message: Array.from(args).map(a => typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a)).join(' '),
+                message: message,
                 timestamp: Date.now()
               }, '*');
-            } catch(e) {}
+            } catch(e) {
+              window.parent.postMessage({ 
+                type: 'console', 
+                logType: 'error', 
+                message: 'Console formatting error: ' + e.message,
+                timestamp: Date.now()
+              }, '*');
+            }
           };
+          
           console.log = function(...args) { sendToParent('log', args); originalConsole.log.apply(console, args); };
           console.error = function(...args) { sendToParent('error', args); originalConsole.error.apply(console, args); };
           console.warn = function(...args) { sendToParent('warn', args); originalConsole.warn.apply(console, args); };
           console.info = function(...args) { sendToParent('info', args); originalConsole.info.apply(console, args); };
+          console.debug = function(...args) { sendToParent('debug', args); originalConsole.debug.apply(console, args); };
+          console.table = function(data) { 
+            sendToParent('log', ['[Table]', JSON.stringify(data, null, 2)]); 
+            originalConsole.table.apply(console, [data]); 
+          };
+          
           window.onerror = function(msg, url, line, col, error) {
-            sendToParent('error', ['Runtime Error: ' + msg + ' (Line ' + line + ')']);
+            let stack = '';
+            if (error && error.stack) {
+              stack = '\\n' + error.stack.split('\\n').slice(0, 5).join('\\n');
+            }
+            sendToParent('error', ['❌ ' + msg + ' (Line ' + line + ', Col ' + col + ')' + stack]);
             return false;
+          };
+          
+          window.onunhandledrejection = function(event) {
+            sendToParent('error', ['❌ Unhandled Promise Rejection: ' + event.reason]);
           };
         })();
       </script>
@@ -326,31 +414,117 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
 </html>`;
   };
 
-  // Allow using "Tab" key for indentation in the textarea
+  const handleEditorScroll = (e: React.UIEvent<HTMLTextAreaElement>) => {
+    const target = e.target as HTMLTextAreaElement;
+    const pre = target.previousElementSibling as HTMLPreElement | null;
+    if (pre) {
+      pre.scrollTop = target.scrollTop;
+      pre.scrollLeft = target.scrollLeft;
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    const target = e.target as HTMLTextAreaElement;
+    const start = target.selectionStart;
+    const end = target.selectionEnd;
+
+    // Tab - 들여쓰기
     if (e.key === 'Tab') {
       e.preventDefault();
-      const target = e.target as HTMLTextAreaElement;
-      const start = target.selectionStart;
-      const end = target.selectionEnd;
-
-      const spaces = '  ';
-      const newValue = content.substring(0, start) + spaces + content.substring(end);
-
-      onUpdateContent(newValue);
-
-      setTimeout(() => {
-        if (textareaRef.current) {
-          textareaRef.current.selectionStart = textareaRef.current.selectionEnd = start + 2;
+      if (e.shiftKey) {
+        // Shift+Tab: 내어쓰기
+        const lineStart = content.lastIndexOf('\n', start - 1) + 1;
+        const lineContent = content.slice(lineStart, end);
+        if (lineContent.startsWith('  ')) {
+          const newContent = content.slice(0, lineStart) + lineContent.slice(2) + content.slice(end);
+          onUpdateContent(newContent);
+          setTimeout(() => {
+            if (textareaRef.current) {
+              textareaRef.current.selectionStart = Math.max(lineStart, start - 2);
+              textareaRef.current.selectionEnd = Math.max(lineStart, end - 2);
+            }
+          }, 0);
         }
-      }, 0);
+      } else {
+        // Tab: 들여쓰기
+        const spaces = '  ';
+        const newContent = content.slice(0, start) + spaces + content.slice(end);
+        onUpdateContent(newContent);
+        setTimeout(() => {
+          if (textareaRef.current) {
+            textareaRef.current.selectionStart = textareaRef.current.selectionEnd = start + 2;
+          }
+        }, 0);
+      }
+      return;
     }
 
+    // Ctrl+D - 현재 줄 복제
+    if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
+      e.preventDefault();
+      const lineStart = content.lastIndexOf('\n', start - 1) + 1;
+      const lineEnd = content.indexOf('\n', start);
+      const line = content.slice(lineStart, lineEnd === -1 ? undefined : lineEnd);
+      const newContent = content.slice(0, lineEnd === -1 ? content.length : lineEnd) + '\n' + line + content.slice(lineEnd === -1 ? content.length : lineEnd);
+      onUpdateContent(newContent);
+      return;
+    }
+
+    // Ctrl+/ - 주석 토글
+    if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+      e.preventDefault();
+      const lineStart = content.lastIndexOf('\n', start - 1) + 1;
+      const lineEnd = content.indexOf('\n', start);
+      const line = content.slice(lineStart, lineEnd === -1 ? undefined : lineEnd);
+      
+      let newLine: string;
+      if (line.trimStart().startsWith('//')) {
+        // 주석 제거
+        newLine = line.replace(/^(\s*)\/\/\s?/, '$1');
+      } else {
+        // 주석 추가
+        newLine = line.replace(/^(\s*)/, '$1// ');
+      }
+      
+      const newContent = content.slice(0, lineStart) + newLine + content.slice(lineEnd === -1 ? content.length : lineEnd);
+      onUpdateContent(newContent);
+      return;
+    }
+
+    // Ctrl+Shift+F - 포매팅
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'F') {
+      e.preventDefault();
+      formatCode();
+      return;
+    }
+
+    // Enter - 자동 들여쓰기
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      const lineStart = content.lastIndexOf('\n', start - 1) + 1;
+      const currentLine = content.slice(lineStart, start);
+      const indent = currentLine.match(/^\s*/)?.[0] || '';
+      
+      // 이전 줄이 { 로 끝나면 추가 들여쓰기
+      const extraIndent = currentLine.trimEnd().endsWith('{') ? '  ' : '';
+      
+      const newContent = content.slice(0, start) + '\n' + indent + extraIndent + content.slice(end);
+      onUpdateContent(newContent);
+      
+      setTimeout(() => {
+        if (textareaRef.current) {
+          const newPos = start + 1 + indent.length + extraIndent.length;
+          textareaRef.current.selectionStart = textareaRef.current.selectionEnd = newPos;
+        }
+      }, 0);
+      return;
+    }
+
+    // 기존 Undo/Redo 단축키 유지
     if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
       e.preventDefault();
       handleUndo();
     }
-
     if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
       e.preventDefault();
       handleRedo();
@@ -360,37 +534,84 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
   const formatCode = () => {
     try {
       let formatted = content;
-
-      const lines = formatted.split('\n');
-      let indentLevel = 0;
-      const indentSize = 2;
-
-      formatted = lines
-        .map((line) => {
+      
+      // 언어 감지
+      const isHtml = /<[a-z][\s\S]*>/i.test(content);
+      const isJson = /^\s*[\[{]/.test(content);
+      const isJs = /\b(const|let|var|function|class|import|export)\b/.test(content);
+      
+      if (isJson) {
+        // JSON 포매팅
+        try {
+          const parsed = JSON.parse(content);
+          formatted = JSON.stringify(parsed, null, 2);
+        } catch {
+          // JSON 파싱 실패 시 무시
+        }
+      } else if (isHtml) {
+        // HTML 포매팅
+        const lines = formatted.split('\n');
+        let indentLevel = 0;
+        const indentSize = 2;
+        const voidElements = ['br', 'hr', 'img', 'input', 'meta', 'link', 'area', 'base', 'col', 'embed', 'param', 'source', 'track', 'wbr'];
+        
+        formatted = lines.map(line => {
           const trimmed = line.trim();
           if (!trimmed) return '';
-
-          if (trimmed.match(/^<\/(div|section|article|header|footer|main|aside|nav|ul|ol|li|table|tr|td|th|thead|tbody|form|fieldset)/i)) {
+          
+          // 닫는 태그 체크
+          const closingMatch = trimmed.match(/^<\/(\w+)/);
+          if (closingMatch) {
             indentLevel = Math.max(0, indentLevel - 1);
           }
-
-          const indentedLine = ' '.repeat(indentLevel * indentSize) + trimmed;
-
-          if (
-            trimmed.match(/<(div|section|article|header|footer|main|aside|nav|ul|ol|li|table|tr|td|th|thead|tbody|form|fieldset)[^>]*>$/i) &&
-            !trimmed.match(/\/>$/)
-          ) {
-            indentLevel++;
+          
+          const indented = ' '.repeat(indentLevel * indentSize) + trimmed;
+          
+          // 여는 태그 체크 (self-closing 및 void 제외)
+          const openingMatch = trimmed.match(/^<(\w+)(?:\s|>)/);
+          if (openingMatch && !trimmed.endsWith('/>') && !voidElements.includes(openingMatch[1].toLowerCase())) {
+            if (!trimmed.includes('</' + openingMatch[1])) {
+              indentLevel++;
+            }
           }
-
-          return indentedLine;
-        })
-        .join('\n');
-
+          
+          return indented;
+        }).join('\n');
+      } else if (isJs) {
+        // JavaScript 기본 포매팅
+        formatted = formatted
+          // 중괄호 주변 공백
+          .replace(/\{(?!\s)/g, '{ ')
+          .replace(/(?<!\s)\}/g, ' }')
+          // 세미콜론 후 줄바꿈 (문자열 내부 제외는 복잡하므로 단순 처리)
+          .replace(/;(?!\s*\n)/g, ';\n')
+          // 연속 빈 줄 제거
+          .replace(/\n{3,}/g, '\n\n');
+      }
+      
       onUpdateContent(formatted);
     } catch (e) {
       console.error('포매팅 오류:', e);
     }
+  };
+
+  const detectLanguage = (code: string): string => {
+    if (!code.trim()) return 'plaintext';
+    
+    const firstLine = code.split('\n')[0].trim().toLowerCase();
+    
+    if (firstLine.startsWith('<!doctype html') || firstLine.startsWith('<html')) return 'HTML';
+    if (firstLine.startsWith('<?xml')) return 'XML';
+    if (/^import\s+.*from\s+['"]/.test(code)) return 'JavaScript';
+    if (/^from\s+\w+\s+import|^import\s+\w+$|^def\s+\w+\s*\(/.test(code)) return 'Python';
+    if (/^package\s+\w+|^public\s+class/.test(code)) return 'Java';
+    if (/^#include\s*</.test(code)) return 'C/C++';
+    if (/^\s*[\[{]/.test(code) && /[\]}]\s*$/.test(code.trim())) return 'JSON';
+    if (/^---\n|^[\w-]+:\s/.test(code)) return 'YAML';
+    if (/^(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP)\s/i.test(code)) return 'SQL';
+    if (/^#!\/bin\/(bash|sh)|^#!/.test(code)) return 'Shell';
+    
+    return 'Code';
   };
 
   return (
@@ -402,11 +623,11 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
         </div>
         <div className="flex items-center gap-1">
           {activeTab === 'edit' && (
-            <div className="flex items-center gap-1 mr-2">
+            <div className="flex items-center gap-1 mr-2 bg-slate-800/50 rounded-lg p-1">
               <button
                 onClick={handleUndo}
                 disabled={historyIndex <= 0}
-                className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed"
+                className="p-1.5 rounded text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                 title="실행 취소 (Ctrl+Z)"
               >
                 <Undo2 size={14} />
@@ -414,18 +635,38 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
               <button
                 onClick={handleRedo}
                 disabled={historyIndex >= history.length - 1}
-                className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed"
+                className="p-1.5 rounded text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                 title="다시 실행 (Ctrl+Y)"
               >
                 <Redo2 size={14} />
               </button>
+              
+              <div className="w-px h-4 bg-slate-700 mx-1" />
+              
               <button
                 onClick={formatCode}
-                className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-700"
-                title="코드 정리"
+                className="p-1.5 rounded text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
+                title="코드 정리 (Ctrl+Shift+F)"
               >
                 <Wand2 size={14} />
               </button>
+              <button
+                onClick={() => {
+                  if (textareaRef.current) {
+                    textareaRef.current.select();
+                  }
+                }}
+                className="p-1.5 rounded text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
+                title="전체 선택 (Ctrl+A)"
+              >
+                <FileText size={14} />
+              </button>
+              
+              <div className="w-px h-4 bg-slate-700 mx-1" />
+              
+              <span className="text-[10px] text-slate-500 font-mono px-2">
+                {detectLanguage(content)}
+              </span>
             </div>
           )}
 
@@ -529,24 +770,40 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
       {/* Content */}
       <div className="flex-1 overflow-hidden relative bg-slate-950">
         {activeTab === 'edit' && (
-          <div className="w-full h-full flex bg-slate-950">
-            <div className="flex-shrink-0 py-6 pr-2 text-right select-none bg-slate-900 border-r border-slate-800">
+          <div className="w-full h-full flex bg-slate-950 relative">
+            <div className="flex-shrink-0 py-4 pr-2 text-right select-none bg-slate-900 border-r border-slate-800 overflow-hidden">
               {content.split('\n').map((_, idx) => (
-                <div key={idx} className="px-3 text-[11px] font-mono text-slate-600 leading-[1.625rem]">
+                <div key={idx} className="px-3 text-[11px] font-mono text-slate-600 leading-6 h-6">
                   {idx + 1}
                 </div>
               ))}
             </div>
 
-            <textarea
-              ref={textareaRef}
-              value={content}
-              onChange={(e) => onUpdateContent(e.target.value)}
-              onKeyDown={handleKeyDown}
-              className="flex-1 h-full bg-slate-950 p-6 pl-4 text-slate-200 font-mono text-sm resize-none focus:outline-none leading-[1.625rem]"
-              spellCheck={false}
-              placeholder="코드를 입력하세요..."
-            />
+            <div className="flex-1 relative overflow-auto" ref={editorRef}>
+              <pre
+                className="absolute inset-0 p-4 pl-4 font-mono text-sm leading-6 pointer-events-none overflow-hidden whitespace-pre-wrap break-words"
+                aria-hidden="true"
+              >
+                <code className="hljs" dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
+              </pre>
+
+              <textarea
+                ref={textareaRef}
+                value={content}
+                onChange={(e) => {
+                  onUpdateContent(e.target.value);
+                  setCursorPosition(e.target.selectionStart);
+                }}
+                onSelect={(e) => setCursorPosition((e.target as HTMLTextAreaElement).selectionStart)}
+                onKeyDown={handleKeyDown}
+                onScroll={handleEditorScroll}
+                data-cursor={cursorPosition}
+                className="absolute inset-0 w-full h-full p-4 pl-4 font-mono text-sm leading-6 bg-transparent text-transparent caret-sky-400 resize-none focus:outline-none overflow-auto"
+                style={{ caretColor: '#38bdf8' }}
+                spellCheck={false}
+                placeholder="코드를 입력하세요..."
+              />
+            </div>
           </div>
         )}
 
@@ -566,6 +823,11 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
                   className="w-full h-full border-none"
                   sandbox="allow-scripts allow-popups allow-forms"
                   srcDoc={getExecutableCode()}
+                  onLoad={() => {
+                    if (iframeLoadTimeRef.current > 0) {
+                      setExecutionTime(performance.now() - iframeLoadTimeRef.current);
+                    }
+                  }}
                 />
               </div>
             </div>
@@ -580,28 +842,68 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
             </button>
 
             {showConsole && (
-              <div className="h-1/2 bg-slate-950 overflow-y-auto font-mono text-xs border-t border-slate-800">
-                {consoleLogs.length === 0 ? (
-                  <div className="p-4 text-slate-600 text-center">콘솔 출력이 여기에 표시됩니다</div>
-                ) : (
-                  consoleLogs.map((log, idx) => (
-                    <div
-                      key={idx}
-                      className={`px-3 py-1.5 border-b border-slate-900 ${
-                        log.type === 'error'
-                          ? 'bg-red-950/30 text-red-400'
-                          : log.type === 'warn'
-                          ? 'bg-yellow-950/30 text-yellow-400'
-                          : log.type === 'info'
-                          ? 'bg-blue-950/30 text-blue-400'
-                          : 'text-slate-300'
-                      }`}
+              <div className="h-1/2 bg-slate-950 flex flex-col border-t border-slate-800">
+                <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900 border-b border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <Terminal size={12} className="text-slate-500" />
+                    <span className="text-[10px] text-slate-400 font-mono">Console</span>
+                    <span className="text-[10px] text-slate-600">({consoleLogs.length})</span>
+                    {executionTime !== null && (
+                      <span className="text-[10px] text-emerald-400 font-mono">⚡ {executionTime.toFixed(0)}ms</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setConsoleLogs([])}
+                      className="text-[10px] text-slate-500 hover:text-slate-300 px-2 py-0.5 rounded hover:bg-slate-800"
                     >
-                      <span className="text-slate-600 mr-2">[{log.type}]</span>
-                      <span className="whitespace-pre-wrap break-all">{log.message}</span>
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto font-mono text-xs">
+                  {consoleLogs.length === 0 ? (
+                    <div className="p-4 text-slate-600 text-center">
+                      콘솔 출력이 여기에 표시됩니다
                     </div>
-                  ))
-                )}
+                  ) : (
+                    consoleLogs.map((log, idx) => (
+                      <div
+                        key={idx}
+                        className={`
+              px-3 py-1.5 border-b border-slate-900/50 flex items-start gap-2
+              ${log.type === 'error' ? 'bg-red-950/30 text-red-400' : ''}
+              ${log.type === 'warn' ? 'bg-yellow-950/30 text-yellow-400' : ''}
+              ${log.type === 'info' ? 'bg-blue-950/30 text-blue-400' : ''}
+              ${log.type === 'debug' ? 'bg-purple-950/30 text-purple-400' : ''}
+              ${log.type === 'log' ? 'text-slate-300' : ''}
+            `}
+                      >
+                        <span className="text-[10px] text-slate-600 select-none min-w-[50px]">
+                          {new Date(log.timestamp).toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit'
+                          })}
+                        </span>
+                        <span
+                          className={`
+              text-[10px] uppercase w-12 flex-shrink-0
+              ${log.type === 'error' ? 'text-red-500' : ''}
+              ${log.type === 'warn' ? 'text-yellow-500' : ''}
+              ${log.type === 'info' ? 'text-blue-500' : ''}
+              ${log.type === 'debug' ? 'text-purple-500' : ''}
+              ${log.type === 'log' ? 'text-slate-500' : ''}
+            `}
+                        >
+                          {log.type}
+                        </span>
+                        <pre className="whitespace-pre-wrap break-all flex-1">{log.message}</pre>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             )}
           </div>
