@@ -54,6 +54,10 @@ export interface ModelOption {
 export interface ContentPart {
   text?: string;
   inlineData?: { mimeType: string; data: string };
+  functionCall?: { name: string; args: Record<string, any> };
+  functionResponse?: { name: string; response: Record<string, any> };
+  executableCode?: { language: string; code: string };
+  codeExecutionResult?: { outcome: string; output?: string };
 }
 
 export interface ChatHistoryItem {

@@ -116,7 +116,9 @@ export const MessageList: React.FC<MessageListProps> = ({
   // Handle manual scroll events to update auto-scroll capability
   const handleScroll = () => {
       if (!containerRef.current) return;
-      // We don't need to do anything complex here, the LayoutEffect handles the pre-render check.
+      const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
+      // 바닥에서 100px 이내면 자동 스크롤 활성화
+      shouldAutoScrollRef.current = scrollHeight - scrollTop - clientHeight < 100;
   };
 
   useEffect(() => {
@@ -193,7 +195,11 @@ export const MessageList: React.FC<MessageListProps> = ({
     // Current App structure: <div className="flex-1 overflow-y-auto ..."><MessageList /></div>
     
     // We will leave the div structure as is but rely on the effect.
-    <div className="w-full p-4 sm:p-8 space-y-8 pb-4">
+    <div 
+      ref={containerRef}
+      onScroll={handleScroll}
+      className="w-full h-full p-4 sm:p-8 space-y-8 pb-4"
+    >
       
       {/* Messages */}
       {messages.map((msg, index) => {

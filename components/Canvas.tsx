@@ -55,6 +55,11 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
     const htmlParts: string[] = [];
     const cssParts: string[] = [];
     const jsParts: string[] = [];
+    
+    // 기본 스크립트 태그 이스케이프 (XSS 방지)
+    const sanitizeForIframe = (code: string) => {
+      return code.replace(/<\/script>/gi, '<\\/script>');
+    };
 
     // Regex to capture code blocks and their language identifier
     // Group 1: Language (optional), Group 2: Code content
@@ -99,15 +104,15 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
 
     // Construct the final HTML document
     return `
-      ${htmlParts.join('\n')}
+      ${sanitizeForIframe(htmlParts.join('\n'))}
       <style>
         /* Default CSS for better reset */
         body { margin: 0; padding: 1rem; }
-        ${cssParts.join('\n')}
+        ${sanitizeForIframe(cssParts.join('\n'))}
       </style>
       <script>
         try {
-            ${jsParts.join('\n')}
+            ${sanitizeForIframe(jsParts.join('\n'))}
         } catch (err) {
             document.body.innerHTML += '<div style="color:red; background:#fee; padding:10px; border:1px solid red; margin-top:20px; border-radius:4px;"><strong>JS Error:</strong> ' + err.message + '</div>';
             console.error(err);
@@ -223,10 +228,10 @@ export const Canvas: React.FC<CanvasProps> = ({ content, isOpen, onClose, onUpda
 
         {activeTab === 'run' && (
              <div className="w-full h-full bg-white">
-                 <iframe
-                    title="Live Preview"
-                    className="w-full h-full border-none"
-                    sandbox="allow-scripts allow-popups allow-forms allow-same-origin"
+                <iframe
+                   title="Live Preview"
+                   className="w-full h-full border-none"
+                    sandbox="allow-scripts allow-popups allow-forms"
                     srcDoc={`
                         <!DOCTYPE html>
                         <html>
