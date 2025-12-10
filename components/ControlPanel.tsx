@@ -2,7 +2,8 @@
 import React, { useState, useEffect } from 'react';
 import { ModelOption, ChatSettings } from '../types';
 import { Loader2, Plus, Terminal, Shield, Zap, Key, Trash2, X, CheckCircle2, Sliders, Box, Settings, Wrench, BookTemplate, Code } from 'lucide-react'; 
-import { SETTINGS_PRESETS, SYSTEM_PROMPT_PRESETS, SettingsPresetId, DEFAULT_TOOL_SETTINGS } from '../constants';
+import { SETTINGS_PRESETS, SYSTEM_PROMPT_PRESETS, SettingsPresetId, DEFAULT_TOOL_SETTINGS, MODEL_SPECS } from '../constants';
+import FunctionEditor from './FunctionEditor';
 
 interface ControlPanelProps {
   isOpen: boolean;
@@ -265,20 +266,64 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                     </select>
                     
                     {currentModelInfo && (
-                        <div className="mt-2 p-2.5 bg-slate-900/50 rounded-md border border-slate-800/50">
-                            <p className="text-[10px] text-slate-400 mb-2 leading-relaxed">
-                                {currentModelInfo.description}
-                            </p>
-                            {currentModelInfo.tags && currentModelInfo.tags.length > 0 && (
-                                <div className="flex flex-wrap gap-1">
-                                    {currentModelInfo.tags.map(tag => (
-                                        <span key={tag} className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800 text-sky-400/80 border border-slate-700/50 font-medium">
-                                            {tag}
-                                        </span>
-                                    ))}
-                                </div>
+                      <div className="mt-3 p-3 bg-slate-900/50 rounded-lg border border-slate-800/50 space-y-3">
+                        {/* 설명 */}
+                        <p className="text-[11px] text-slate-400 leading-relaxed">
+                          {currentModelInfo.description}
+                        </p>
+                        
+                        {/* 태그 */}
+                        {currentModelInfo.tags && currentModelInfo.tags.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {currentModelInfo.tags.map(tag => (
+                              <span key={tag} className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800 text-sky-400/80 border border-slate-700/50 font-medium">
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        
+                        {/* 상세 스펙 - MODEL_SPECS에 있는 경우만 */}
+                        {MODEL_SPECS[localSettings.modelId] && (
+                          <div className="pt-2 border-t border-slate-800/50 space-y-2">
+                            <div className="grid grid-cols-2 gap-2 text-[10px]">
+                              <div>
+                                <span className="text-slate-600">Context:</span>
+                                <span className="ml-1 text-slate-400">{MODEL_SPECS[localSettings.modelId].contextWindow}</span>
+                              </div>
+                              <div>
+                                <span className="text-slate-600">Max Output:</span>
+                                <span className="ml-1 text-slate-400">{MODEL_SPECS[localSettings.modelId].maxOutput.toLocaleString()}</span>
+                              </div>
+                              <div className="col-span-2">
+                                <span className="text-slate-600">가격:</span>
+                                <span className="ml-1 text-emerald-400/80">
+                                  ${MODEL_SPECS[localSettings.modelId].inputPrice} / ${MODEL_SPECS[localSettings.modelId].outputPrice}
+                                </span>
+                                <span className="text-slate-600 ml-1">(in/out per 1M)</span>
+                              </div>
+                            </div>
+                            
+                            {MODEL_SPECS[localSettings.modelId].capabilities.length > 0 && (
+                              <div className="text-[10px]">
+                                <span className="text-emerald-500">✓</span>
+                                <span className="text-slate-500 ml-1">
+                                  {MODEL_SPECS[localSettings.modelId].capabilities.join(' • ')}
+                                </span>
+                              </div>
                             )}
-                        </div>
+                            
+                            {MODEL_SPECS[localSettings.modelId].limitations.length > 0 && (
+                              <div className="text-[10px]">
+                                <span className="text-amber-500">⚠</span>
+                                <span className="text-slate-500 ml-1">
+                                  {MODEL_SPECS[localSettings.modelId].limitations.join(' • ')}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     )}
                 </>
                 )}
@@ -453,23 +498,18 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
              
              {/* New Advanced Tools Toggles */}
              <div className="pt-2 border-t border-slate-800/50 space-y-3">
-                 <div className="flex items-center justify-between">
-                   <div>
-                     <div className="text-xs font-semibold text-slate-300">Function Calling</div>
-                     <div className="text-[9px] text-slate-500">모델이 지정한 함수를 호출할 수 있도록 허용합니다.</div>
-                   </div>
-                   <input
-                     type="checkbox"
-                     className="accent-sky-600"
-                     checked={localSettings.toolSettings?.enableFunctionCalling ?? false}
-                     onChange={(e) =>
-                       updateSetting('toolSettings', {
-                         ...(localSettings.toolSettings ?? DEFAULT_TOOL_SETTINGS),
-                         enableFunctionCalling: e.target.checked,
-                       })
-                     }
-                   />
-                 </div>
+                 <FunctionEditor
+                   functions={localSettings.toolSettings?.functions || []}
+                   onChange={(fns) => updateSetting('toolSettings', {
+                     ...(localSettings.toolSettings ?? DEFAULT_TOOL_SETTINGS),
+                     functions: fns
+                   })}
+                   isEnabled={localSettings.toolSettings?.enableFunctionCalling ?? false}
+                   onToggleEnabled={(enabled) => updateSetting('toolSettings', {
+                     ...(localSettings.toolSettings ?? DEFAULT_TOOL_SETTINGS),
+                     enableFunctionCalling: enabled
+                   })}
+                 />
 
                  <div className="flex items-center justify-between">
                    <div>

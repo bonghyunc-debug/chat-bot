@@ -1,9 +1,11 @@
 
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
 import { ChatMessage, Attachment } from '../types';
-import { Edit3, Copy, Check, Globe, LayoutTemplate, Download, ChevronDown, ChevronRight, Terminal, FileText, FileAudio, FileVideo, File, RotateCw, BarChart2 } from 'lucide-react';
+import { Edit3, Copy, Check, Globe, LayoutTemplate, Download, FileText, FileAudio, FileVideo, File, RotateCw, BarChart2 } from 'lucide-react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+import { calculateCost } from '../utils/pricing';
+import ThinkingDisplay from './ThinkingDisplay';
 
 // Declare hljs from window (loaded in index.html)
 declare const hljs: any;
@@ -89,7 +91,7 @@ const CopyDropdown: React.FC<{
     </div>
   );
   };
-  interface MessageListProps {
+interface MessageListProps {
   messages: ChatMessage[];
   onEditMessage: (messageId: string) => void;
   onRegenerate: () => void;
@@ -97,6 +99,8 @@ const CopyDropdown: React.FC<{
   showThoughts: boolean;
   onOpenCanvas: (content: string) => void;
   isLoading?: boolean;
+  modelId: string;
+  onOpenThinkingSidePanel?: (thoughts: string) => void;
 }
 
 marked.setOptions({
@@ -161,9 +165,15 @@ interface MessageItemProps {
   expandedThoughts: Record<string, boolean>;
   onToggleThoughts: (id: string) => void;
   onTypewriterUpdate?: () => void;
+  modelId: string;
+  thinkingDisplayMode: Record<string, 'collapsed' | 'timeline' | 'full'>;
+  onThinkingModeChange: (msgId: string, mode: 'collapsed' | 'timeline' | 'full') => void;
+  onOpenThinkingSidePanel?: (thoughts: string) => void;
+  showVersionHistory: Record<string, boolean>;
+  setShowVersionHistory: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
 }
 
-const MessageItem = React.memo<MessageItemProps>(({
+const MessageItem = React.memo<MessageItemProps>(({ 
   msg,
   isLastMessage,
   isLastUserMessageId,
@@ -176,7 +186,13 @@ const MessageItem = React.memo<MessageItemProps>(({
   copiedMessageId,
   expandedThoughts,
   onToggleThoughts,
-  onTypewriterUpdate
+  onTypewriterUpdate,
+  modelId,
+  thinkingDisplayMode,
+  onThinkingModeChange,
+  onOpenThinkingSidePanel,
+  showVersionHistory,
+  setShowVersionHistory
 }) => {
   const isModel = msg.role === 'model' || msg.role === 'error';
   const isUser = msg.role === 'user';
@@ -236,27 +252,14 @@ const MessageItem = React.memo<MessageItemProps>(({
 
           {/* Thinking Process */}
           {showThoughts && isModel && msg.thoughts && (
-            <div className="mb-6 rounded-md overflow-hidden border border-slate-800 bg-slate-900/40">
-              <button
-                onClick={() => onToggleThoughts(msg.id)}
-                className="w-full flex items-center gap-2 p-2 bg-slate-900 border-b border-slate-800 text-xs font-mono text-slate-400 hover:text-sky-400 transition-colors"
-              >
-                <Terminal size={12} />
-                <span>Thinking Process</span>
-                <span className="ml-auto">
-                  {expandedThoughts[msg.id] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                </span>
-              </button>
-
-              {expandedThoughts[msg.id] && (
-                <div className="p-4 bg-[#0a0f1e]">
-                  <div
-                    className="text-xs text-slate-400 font-mono leading-relaxed opacity-80 markdown-body"
-                    dangerouslySetInnerHTML={renderMarkdown(msg.thoughts)}
-                  />
-                </div>
-              )}
-            </div>
+            <ThinkingDisplay
+              thoughts={msg.thoughts}
+              isExpanded={expandedThoughts[msg.id] || false}
+              onToggle={() => onToggleThoughts(msg.id)}
+              displayMode={thinkingDisplayMode[msg.id] || 'collapsed'}
+              onModeChange={(mode) => onThinkingModeChange(msg.id, mode)}
+              onOpenSidePanel={onOpenThinkingSidePanel}
+            />
           )}
 
           {/* Main Content */}
@@ -276,6 +279,28 @@ const MessageItem = React.memo<MessageItemProps>(({
             </>
           ) : (
             msg.isLoading && isModel && <span className="inline-block w-2 h-5 bg-sky-500 animate-pulse align-middle ml-1"></span>
+          )}
+
+          {isUser && msg.previousVersions && msg.previousVersions.length > 0 && (
+            <button
+              onClick={() => setShowVersionHistory(prev => ({ ...prev, [msg.id]: !prev[msg.id] }))}
+              className="text-[10px] text-slate-500 hover:text-sky-400 mt-1"
+            >
+              📜 {msg.previousVersions.length}개 이전 버전
+            </button>
+          )}
+
+          {showVersionHistory[msg.id] && msg.previousVersions && (
+            <div className="mt-2 p-2 bg-slate-900/50 rounded border border-slate-800 space-y-2">
+              {msg.previousVersions.map((v, i) => (
+                <div key={i} className="text-xs text-slate-500">
+                  <span className="text-slate-600">v{i + 1}</span>
+                  <span className="mx-2">•</span>
+                  <span>{new Date(v.timestamp).toLocaleTimeString()}</span>
+                  <p className="text-slate-400 mt-1 truncate">{v.content}</p>
+                </div>
+              ))}
+            </div>
           )}
 
           {/* Grounding Sources */}
@@ -313,7 +338,7 @@ const MessageItem = React.memo<MessageItemProps>(({
 
           {/* Token Usage */}
           {isModel && msg.usageMetadata && (
-            <div className="mt-4 flex items-center gap-3 text-[10px] text-slate-500 font-mono bg-slate-900/40 w-fit px-2 py-1 rounded border border-slate-800/50 select-none">
+            <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-500 font-mono bg-slate-900/40 w-fit px-2 py-1.5 rounded border border-slate-800/50 select-none">
               <div className="flex items-center gap-1.5" title="Prompt Tokens">
                 <span className="w-1.5 h-1.5 rounded-full bg-indigo-500/50"></span>
                 <span>In: {msg.usageMetadata.promptTokenCount.toLocaleString()}</span>
@@ -322,8 +347,15 @@ const MessageItem = React.memo<MessageItemProps>(({
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/50"></span>
                 <span>Out: {msg.usageMetadata.candidatesTokenCount.toLocaleString()}</span>
               </div>
-              <div className="flex items-center gap-1.5 border-l border-slate-800 pl-2 ml-1 font-semibold text-slate-400" title="Total Tokens">
+              <div className="flex items-center gap-1.5 border-l border-slate-800 pl-2 ml-1" title="Total Tokens">
                 <span>Total: {msg.usageMetadata.totalTokenCount.toLocaleString()}</span>
+              </div>
+              <div className="flex items-center gap-1.5 border-l border-slate-800 pl-2 ml-1 text-emerald-400" title="예상 비용">
+                <span>💰 ${calculateCost(
+                  modelId,
+                  msg.usageMetadata.promptTokenCount,
+                  msg.usageMetadata.candidatesTokenCount
+                ).total.toFixed(4)}</span>
               </div>
             </div>
           )}
@@ -402,7 +434,9 @@ const MessageItem = React.memo<MessageItemProps>(({
     prevProps.showThoughts === nextProps.showThoughts &&
     prevProps.isGlobalLoading === nextProps.isGlobalLoading &&
     prevProps.copiedMessageId === nextProps.copiedMessageId &&
-    prevProps.expandedThoughts[prevProps.msg.id] === nextProps.expandedThoughts[nextProps.msg.id]
+    prevProps.expandedThoughts[prevProps.msg.id] === nextProps.expandedThoughts[nextProps.msg.id] &&
+    prevProps.thinkingDisplayMode[prevProps.msg.id] === nextProps.thinkingDisplayMode[nextProps.msg.id] &&
+    prevProps.showVersionHistory[prevProps.msg.id] === nextProps.showVersionHistory[nextProps.msg.id]
   );
 });
 
@@ -484,10 +518,14 @@ const MessageListInner: React.FC<MessageListProps> = ({
     lastUserMessageId,
     showThoughts,
     onOpenCanvas,
-    isLoading
+    isLoading,
+    modelId,
+    onOpenThinkingSidePanel
 }) => {
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [expandedThoughts, setExpandedThoughts] = useState<Record<string, boolean>>({});
+  const [thinkingDisplayMode, setThinkingDisplayMode] = useState<Record<string, 'collapsed' | 'timeline' | 'full'>>({});
+  const [showVersionHistory, setShowVersionHistory] = useState<Record<string, boolean>>({});
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -546,6 +584,13 @@ const MessageListInner: React.FC<MessageListProps> = ({
       setExpandedThoughts(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const handleThinkingModeChange = (msgId: string, mode: 'collapsed' | 'timeline' | 'full') => {
+    setThinkingDisplayMode(prev => ({ ...prev, [msgId]: mode }));
+    if (mode !== 'collapsed') {
+      setExpandedThoughts(prev => ({ ...prev, [msgId]: true }));
+    }
+  };
+
   // Called by Typewriter to force scroll if we are already following
   const handleTypewriterUpdate = () => {
       if (bottomRef.current && shouldAutoScrollRef.current) {
@@ -590,6 +635,12 @@ const MessageListInner: React.FC<MessageListProps> = ({
             expandedThoughts={expandedThoughts}
             onToggleThoughts={toggleThoughts}
             onTypewriterUpdate={handleTypewriterUpdate}
+            modelId={modelId}
+            thinkingDisplayMode={thinkingDisplayMode}
+            onThinkingModeChange={handleThinkingModeChange}
+            onOpenThinkingSidePanel={onOpenThinkingSidePanel}
+            showVersionHistory={showVersionHistory}
+            setShowVersionHistory={setShowVersionHistory}
           />
         );
       })}

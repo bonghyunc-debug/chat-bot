@@ -40,12 +40,16 @@ export interface ChatMessage {
   usageMetadata?: UsageMetadata; // Token usage info
   isLoading?: boolean;
   attachments?: Attachment[]; // Replaces single 'image' field
-  
+
   // Attachment for model generated content (e.g. generated images)
   modelAttachment?: {
     data: string;
     mimeType: string;
   };
+  previousVersions?: Array<{
+    content: string;
+    timestamp: Date;
+  }>;
 }
 
 export interface ChatSession {

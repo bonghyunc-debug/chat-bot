@@ -13,3 +13,4 @@ export {
   withRetry,
   isRetryableError
 } from './helpers';
+export { calculateCost, formatCost } from './pricing';

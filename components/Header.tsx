@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { PanelRightClose, PanelRightOpen, SlidersHorizontal, BarChart2, Image } from 'lucide-react';
+import { PanelRightClose, PanelRightOpen, SlidersHorizontal, BarChart2, Image, Scale } from 'lucide-react';
 import { MessageSearch } from './MessageSearch';
 import { ChatMessage } from '../types';
 
@@ -17,6 +17,7 @@ interface HeaderProps {
   onOpenImageGallery?: () => void;
   messages?: ChatMessage[];
   onScrollToMessage?: (messageId: string) => void;
+  onOpenCompareMode?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -30,7 +31,8 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenUsageStats,
   onOpenImageGallery,
   messages,
-  onScrollToMessage
+  onScrollToMessage,
+  onOpenCompareMode
 }) => {
   return (
     <header className="bg-slate-950/80 backdrop-blur-sm px-6 h-[60px] shadow-sm flex items-center justify-between z-10 border-b border-slate-800 shrink-0">
@@ -59,6 +61,16 @@ export const Header: React.FC<HeaderProps> = ({
         </button>
 
         <div className="h-4 w-px bg-slate-800 mx-1"></div>
+
+        {onOpenCompareMode && (
+          <button
+            onClick={onOpenCompareMode}
+            className="p-2 rounded-lg transition-colors text-slate-400 hover:text-amber-400 hover:bg-slate-800 border border-transparent"
+            title="응답 비교 모드"
+          >
+            <Scale size={18} />
+          </button>
+        )}
 
         {onOpenUsageStats && (
           <button

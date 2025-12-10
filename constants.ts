@@ -141,3 +141,61 @@ export const ERROR_MESSAGES = {
   NETWORK_OFFLINE: '네트워크 연결을 확인해주세요.',
   GENERATION_STOPPED: '[생성 중단됨]',
 } as const;
+
+export const MODEL_SPECS: Record<string, {
+  contextWindow: string;
+  maxOutput: number;
+  inputPrice: number;
+  outputPrice: number;
+  capabilities: string[];
+  limitations: string[];
+}> = {
+  'gemini-3-pro-preview': {
+    contextWindow: '1M tokens',
+    maxOutput: 8192,
+    inputPrice: 1.25,
+    outputPrice: 5.00,
+    capabilities: ['Thinking (thinkingLevel)', 'Vision', 'Google Search', 'Code Execution'],
+    limitations: ['Preview - 변경 가능', '이미지 생성 미지원']
+  },
+  'gemini-2.5-flash': {
+    contextWindow: '1M tokens',
+    maxOutput: 8192,
+    inputPrice: 0.075,
+    outputPrice: 0.30,
+    capabilities: ['Vision', 'Google Search', 'Thinking (budget)', '빠른 응답'],
+    limitations: []
+  },
+  'gemini-2.5-flash-lite': {
+    contextWindow: '1M tokens',
+    maxOutput: 8192,
+    inputPrice: 0.01875,
+    outputPrice: 0.075,
+    capabilities: ['Vision', '초고속 응답', '저비용'],
+    limitations: ['Google Search 미지원']
+  },
+  'gemini-2.5-pro': {
+    contextWindow: '1M tokens',
+    maxOutput: 8192,
+    inputPrice: 1.25,
+    outputPrice: 5.00,
+    capabilities: ['Vision', 'Google Search', 'Thinking', '고품질 추론'],
+    limitations: []
+  },
+  'gemini-3-pro-image-preview': {
+    contextWindow: '1M tokens',
+    maxOutput: 8192,
+    inputPrice: 1.25,
+    outputPrice: 5.00,
+    capabilities: ['이미지 생성', 'Vision', '멀티모달'],
+    limitations: ['Preview - 변경 가능', 'Thinking 미지원']
+  },
+  'gemini-2.5-flash-image': {
+    contextWindow: '1M tokens',
+    maxOutput: 8192,
+    inputPrice: 0.075,
+    outputPrice: 0.30,
+    capabilities: ['이미지 생성', 'Vision', '빠른 이미지 처리'],
+    limitations: ['Thinking 미지원']
+  }
+};
