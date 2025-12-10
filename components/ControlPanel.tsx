@@ -37,12 +37,23 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const [newStopSequence, setNewStopSequence] = useState('');
   const [newApiKey, setNewApiKey] = useState('');
   const [isApplied, setIsApplied] = useState(false);
+  const [hasLocalChanges, setHasLocalChanges] = useState(false);
   const [selectedPreset, setSelectedPreset] = useState<SettingsPresetId | 'custom'>('custom');
   const [selectedSystemPresetId, setSelectedSystemPresetId] = useState<string>('custom');
 
   useEffect(() => {
-    setLocalSettings(currentSettings);
-  }, [currentSettings]);
+    // 로컬 변경사항이 없을 때만 외부 설정 동기화
+    if (!hasLocalChanges) {
+      setLocalSettings(currentSettings);
+    }
+  }, [currentSettings, hasLocalChanges]);
+
+  // isApplied가 true가 되면 hasLocalChanges 리셋
+  useEffect(() => {
+    if (isApplied) {
+      setHasLocalChanges(false);
+    }
+  }, [isApplied]);
 
   useEffect(() => {
     const matched = SYSTEM_PROMPT_PRESETS.find(p => p.instruction.trim() === localSettings.systemInstruction.trim());
@@ -53,8 +64,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   const updateSetting = (key: keyof ChatSettings, value: any) => {
     const updated = { ...localSettings, [key]: value };
     setLocalSettings(updated);
-    setIsApplied(false); 
+    setIsApplied(false);
     setSelectedPreset('custom');
+    setHasLocalChanges(true);
   };
 
   const handleApplySettings = () => {

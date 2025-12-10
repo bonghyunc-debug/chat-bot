@@ -54,17 +54,31 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       return;
     }
 
+    const abortController = new AbortController();
+    
     const handle = setTimeout(async () => {
       // NOTE: For accurate counting, we send only text part as requested in instructions.
       // Attachments token counting requires more complex logic (converting base64 to parts).
       const contents = [
         { role: 'user', parts: [{ text: inputText }] },
       ];
-      const tokens = await geminiServiceInstance.countTokens(modelId, apiKey, contents);
-      setTokenCount(tokens);
+      try {
+        const tokens = await geminiServiceInstance.countTokens(modelId, apiKey, contents);
+        if (!abortController.signal.aborted) {
+          setTokenCount(tokens);
+        }
+      } catch (e) {
+        // 요청 취소 또는 에러 시 무시
+        if (!abortController.signal.aborted) {
+          setTokenCount(null);
+        }
+      }
     }, 400); // 400ms debounce
 
-    return () => clearTimeout(handle);
+    return () => {
+      clearTimeout(handle);
+      abortController.abort();
+    };
   }, [inputText, modelId, apiKey]);
 
   const processFiles = async (files: FileList | File[]) => {

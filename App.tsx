@@ -202,7 +202,7 @@ const App: React.FC = () => {
   // Initialize API Chat Object when critical settings change
   useEffect(() => {
     if (currentSettings.modelId && !isModelsLoading && currentSessionId) {
-        const needsReinit = !activeChatSettings || 
+        const needsReinit = !activeChatSettings ||
             currentSettings.modelId !== activeChatSettings.modelId ||
             currentSettings.systemInstruction !== activeChatSettings.systemInstruction ||
             currentSettings.temperature !== activeChatSettings.temperature ||
@@ -220,8 +220,7 @@ const App: React.FC = () => {
             initializeCurrentChatSession();
         }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSettings, isModelsLoading, currentSessionId]);
+  }, [currentSettings, isModelsLoading, currentSessionId, activeChatSettings, initializeCurrentChatSession]);
 
   // --- Logic ---
 
@@ -387,6 +386,11 @@ const App: React.FC = () => {
     };
   };
 
+  const updateCurrentSessionMessagesRef = useRef(updateCurrentSessionMessages);
+  useEffect(() => {
+    updateCurrentSessionMessagesRef.current = updateCurrentSessionMessages;
+  }, [updateCurrentSessionMessages]);
+
   const initializeCurrentChatSession = useCallback(async (history?: ChatHistoryItem[]) => {
     if (!currentSettings.modelId) return;
     setIsLoading(true);
@@ -402,7 +406,7 @@ const App: React.FC = () => {
       
       if (!newSession) {
           // Explicit null handling instead of throw
-          updateCurrentSessionMessages(prev => [...prev, { 
+          updateCurrentSessionMessagesRef.current(prev => [...prev, { 
               id: Date.now().toString(), 
               role: 'error', 
               content: '모델 초기화에 실패했습니다 (세션 생성 불가). API 키나 네트워크 상태를 확인해주세요.', 
@@ -416,11 +420,11 @@ const App: React.FC = () => {
       setActiveChatSettings(currentSettings);
     } catch (error) {
       console.error("Error initializing chat session:", error);
-      updateCurrentSessionMessages(prev => [...prev, { id: Date.now().toString(), role: 'error', content: `채팅 초기화 오류: ${String(error)}`, timestamp: new Date() }]);
+      updateCurrentSessionMessagesRef.current(prev => [...prev, { id: Date.now().toString(), role: 'error', content: `채팅 초기화 오류: ${String(error)}`, timestamp: new Date() }]);
     } finally {
       setIsLoading(false);
     }
-  }, [currentSettings]); 
+  }, [currentSettings]);
 
   // Abstracted logic for streaming response, used by both send and regenerate
   // Added optional 'overrideHistory' to support regeneration logic where state is stale

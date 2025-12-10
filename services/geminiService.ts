@@ -168,6 +168,12 @@ const geminiServiceImpl: GeminiService = {
       
       const isImageModel = modelId.toLowerCase().includes('image');
 
+      interface ThinkingConfig {
+        includeThoughts?: boolean;
+        thinkingBudget?: number;
+        thinkingLevel?: 'low' | 'medium' | 'high';
+      }
+
       const chatConfig: {
         systemInstruction?: string;
         temperature?: number;
@@ -176,8 +182,8 @@ const geminiServiceImpl: GeminiService = {
         maxOutputTokens?: number;
         responseMimeType?: string;
         stopSequences?: string[];
-        safetySettings?: any[];
-        thinkingConfig?: any;
+        safetySettings?: { category: string; threshold: string }[];
+        thinkingConfig?: ThinkingConfig;
         tools?: any[];
         imageConfig?: { aspectRatio?: string; imageSize?: string };
       } = {
@@ -227,7 +233,7 @@ const geminiServiceImpl: GeminiService = {
         if (settings.showThoughts) {
           // 3.x 계열 (예: gemini-3-pro-preview): thinkingLevel + includeThoughts 사용
           if (modelId.startsWith('gemini-3-')) {
-             (chatConfig as any).thinkingConfig = {
+             chatConfig.thinkingConfig = {
                  includeThoughts: true,
                  thinkingLevel: 'high' // Gemini 3 Pro 싱킹 레벨 High 고정
              };
