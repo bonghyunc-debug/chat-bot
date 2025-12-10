@@ -5,14 +5,17 @@ import { DEFAULT_MODEL_ID, DEFAULT_SYSTEM_INSTRUCTION, DEFAULT_TEMPERATURE, DEFA
 import { Header } from './components/Header';
 import { MessageList } from './components/MessageList';
 import { ChatInput } from './components/ChatInput';
-import { ControlPanel } from './components/ControlPanel'; 
+import { ControlPanel } from './components/ControlPanel';
 import { Sidebar } from './components/Sidebar';
 import { Canvas } from './components/Canvas';
 import CodeExportModal from './components/CodeExportModal';
-import { geminiServiceInstance } from './services/geminiService';
+import { geminiServiceInstance, generateChatTitle } from './services/geminiService';
 import { Chat, GroundingMetadata } from '@google/genai';
 import { initApiKeyPool, getHealthyApiKey } from './services/apiKeyPool';
 import { PlaygroundInspector, PlaygroundRequestPreview } from './components/PlaygroundInspector';
+import { PromptLibrary } from './components/PromptLibrary';
+import { UsageStats } from './components/UsageStats';
+import { ImageGallery } from './components/ImageGallery';
 
 const App: React.FC = () => {
   // --- State: Sessions & Persistence ---
@@ -106,6 +109,10 @@ const App: React.FC = () => {
 
   const [inputText, setInputText] = useState<string>('');
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const streamAbortControllerRef = useRef<AbortController | null>(null);
+  const [isPromptLibraryOpen, setIsPromptLibraryOpen] = useState(false);
+  const [isUsageStatsOpen, setIsUsageStatsOpen] = useState(false);
+  const [isImageGalleryOpen, setIsImageGalleryOpen] = useState(false);
 
   // Helper to get current messages
   const currentMessages = sessions.find(s => s.id === currentSessionId)?.messages || [];
@@ -274,10 +281,21 @@ const App: React.FC = () => {
       if (s.id === currentSessionId) {
         const newMsgs = updateFn(s.messages);
         let newTitle = s.title;
+        
+        // 첫 메시지가 추가될 때 비동기 제목 생성
         if (s.messages.length === 0 && newMsgs.length > 0 && s.title === '새 채팅') {
            const firstUserMsg = newMsgs.find(m => m.role === 'user');
            if (firstUserMsg) {
+             // 임시 제목 설정
              newTitle = firstUserMsg.content.slice(0, 30) + (firstUserMsg.content.length > 30 ? '...' : '');
+             
+             // 비동기로 AI 제목 생성 (세션 ID 캡처)
+             const sessionIdToUpdate = s.id;
+             generateChatTitle(firstUserMsg.content, getHealthyApiKey()).then(aiTitle => {
+               setSessions(prevSessions => prevSessions.map(sess => 
+                 sess.id === sessionIdToUpdate ? { ...sess, title: aiTitle } : sess
+               ));
+             });
            }
         }
         return { ...s, messages: newMsgs, title: newTitle, lastModified: Date.now() };
@@ -429,6 +447,10 @@ const App: React.FC = () => {
   // Abstracted logic for streaming response, used by both send and regenerate
   // Added optional 'overrideHistory' to support regeneration logic where state is stale
   const streamResponse = async (inputContent: string, attachments: Attachment[], overrideHistory?: ChatMessage[]) => {
+    // Create new AbortController for this stream
+    streamAbortControllerRef.current = new AbortController();
+    const abortSignal = streamAbortControllerRef.current.signal;
+
     setIsLoading(true);
     setLastUsage(null);
     setLastRequestPreview(buildRequestPreview(inputContent, attachments));
@@ -510,11 +532,14 @@ const App: React.FC = () => {
       (error) => {
         updateCurrentSessionMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, role: 'error', content: error.message, isLoading: false } : msg));
         setIsLoading(false);
+        streamAbortControllerRef.current = null;
       },
       () => {
         updateCurrentSessionMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, isLoading: false } : msg));
         setIsLoading(false);
-      }
+        streamAbortControllerRef.current = null;
+      },
+      abortSignal
     );
   };
 
@@ -640,6 +665,44 @@ const App: React.FC = () => {
       setIsControlPanelOpen(false); // Close control panel when canvas opens to save space
   };
 
+  const handleExportSessions = () => {
+    const dataStr = JSON.stringify(sessions, null, 2);
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `gemini-chat-export-${new Date().toISOString().slice(0,10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportSessions = (importedSessions: ChatSession[]) => {
+    // 중복 ID 방지를 위해 새 ID 부여
+    const newSessions = importedSessions.map(s => ({
+      ...s,
+      id: `imported-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      lastModified: Date.now()
+    }));
+    setSessions(prev => [...newSessions, ...prev]);
+    if (newSessions.length > 0) {
+      setCurrentSessionId(newSessions[0].id);
+    }
+  };
+
+  const handleStopGeneration = () => {
+    if (streamAbortControllerRef.current) {
+      streamAbortControllerRef.current.abort();
+      streamAbortControllerRef.current = null;
+      setIsLoading(false);
+      // 현재 로딩 중인 메시지의 isLoading을 false로
+      updateCurrentSessionMessages(prev => 
+        prev.map(msg => msg.isLoading ? { ...msg, isLoading: false, content: msg.content + '\n\n[생성 중단됨]' } : msg)
+      );
+    }
+  };
+
   const getCurrentModelDisplayName = () => {
      const model = apiModels.find(m => m.id === currentSettings.modelId);
      return model ? model.name : currentSettings.modelId;
@@ -647,13 +710,15 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
-      <Sidebar 
+      <Sidebar
         sessions={sessions}
         currentSessionId={currentSessionId}
         onSelectSession={setCurrentSessionId}
         onCreateSession={createNewSession}
         onDeleteSession={deleteSession}
         onRenameSession={handleRenameSession}
+        onExportSessions={handleExportSessions}
+        onImportSessions={handleImportSessions}
       />
       
       <div className="flex flex-col flex-1 h-full w-full relative min-w-0">
@@ -669,6 +734,8 @@ const App: React.FC = () => {
               if (!isCanvasOpen) setIsControlPanelOpen(false);
           }}
           isControlPanelOpen={isControlPanelOpen}
+          onOpenUsageStats={() => setIsUsageStatsOpen(true)}
+          onOpenImageGallery={() => setIsImageGalleryOpen(true)}
         />
 
         {modelsLoadingError && (
@@ -707,6 +774,8 @@ const App: React.FC = () => {
                     isEditing={!!editingMessageId}
                     modelId={currentSettings.modelId}
                     apiKey={getHealthyApiKey()}
+                    onStopGeneration={handleStopGeneration}
+                    onOpenPromptLibrary={() => setIsPromptLibraryOpen(true)}
                 />
             </div>
 
@@ -741,11 +810,32 @@ const App: React.FC = () => {
             )}
             
             {/* Code Export Modal */}
-            <CodeExportModal 
+            <CodeExportModal
                 isOpen={isCodeModalOpen}
                 onClose={() => setIsCodeModalOpen(false)}
                 modelId={currentSettings.modelId}
                 settings={currentSettings}
+            />
+
+            {/* Prompt Library Modal */}
+            <PromptLibrary
+              isOpen={isPromptLibraryOpen}
+              onClose={() => setIsPromptLibraryOpen(false)}
+              onSelectPrompt={(content) => setInputText(content)}
+            />
+
+            {/* Usage Stats Modal */}
+            <UsageStats
+              isOpen={isUsageStatsOpen}
+              onClose={() => setIsUsageStatsOpen(false)}
+              sessions={sessions}
+            />
+
+            {/* Image Gallery Modal */}
+            <ImageGallery
+              isOpen={isImageGalleryOpen}
+              onClose={() => setIsImageGalleryOpen(false)}
+              sessions={sessions}
             />
         </div>
       </div>

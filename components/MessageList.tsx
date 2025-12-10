@@ -8,6 +8,88 @@ import DOMPurify from 'dompurify';
 // Declare hljs from window (loaded in index.html)
 declare const hljs: any;
 
+// Copy Format Dropdown Component
+const CopyDropdown: React.FC<{
+  content: string;
+  messageId: string;
+  onCopySuccess: (id: string) => void;
+}> = ({ content, messageId, onCopySuccess }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    if (isOpen) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen]);
+
+  const handleCopy = async (format: 'plain' | 'markdown' | 'html') => {
+    let textToCopy = content;
+    
+    if (format === 'plain') {
+      // Strip markdown syntax
+      textToCopy = content
+        .replace(/```[\s\S]*?```/g, (match) => match.replace(/```\w*\n?/g, '').trim())
+        .replace(/`([^`]+)`/g, '$1')
+        .replace(/\*\*([^*]+)\*\*/g, '$1')
+        .replace(/\*([^*]+)\*/g, '$1')
+        .replace(/^#+\s/gm, '')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+    } else if (format === 'html') {
+      const rawHtml = marked.parse(content);
+      textToCopy = DOMPurify.sanitize(rawHtml as string);
+    }
+    // markdown: 원본 그대로
+
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      onCopySuccess(messageId);
+      setIsOpen(false);
+    } catch (err) {
+      console.error('Copy failed:', err);
+    }
+  };
+
+  return (
+    <div ref={dropdownRef} className="relative">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="p-1.5 text-slate-500 hover:text-sky-400 hover:bg-slate-800 rounded transition-colors"
+        title="복사 옵션"
+      >
+        <Copy size={14} />
+      </button>
+      
+      {isOpen && (
+        <div className="absolute bottom-full mb-1 left-0 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 min-w-[120px] py-1">
+          <button
+            onClick={() => handleCopy('plain')}
+            className="w-full px-3 py-1.5 text-xs text-left text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
+          >
+            Plain Text
+          </button>
+          <button
+            onClick={() => handleCopy('markdown')}
+            className="w-full px-3 py-1.5 text-xs text-left text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
+          >
+            Markdown
+          </button>
+          <button
+            onClick={() => handleCopy('html')}
+            className="w-full px-3 py-1.5 text-xs text-left text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
+          >
+            HTML
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 interface MessageListProps {
   messages: ChatMessage[];
   onEditMessage: (messageId: string) => void;
@@ -399,13 +481,17 @@ export const MessageList: React.FC<MessageListProps> = ({
                         )}
                         
                         {msg.content && (
-                            <button
-                                onClick={() => handleCopyMessage(msg.content, msg.id)}
-                                className="p-1.5 text-slate-500 hover:text-sky-400 hover:bg-slate-800 rounded transition-colors"
-                                title="복사"
-                            >
-                                {copiedMessageId === msg.id ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
-                            </button>
+                            copiedMessageId === msg.id ? (
+                                <span className="p-1.5 text-emerald-400">
+                                    <Check size={14} />
+                                </span>
+                            ) : (
+                                <CopyDropdown
+                                    content={msg.content}
+                                    messageId={msg.id}
+                                    onCopySuccess={setCopiedMessageId}
+                                />
+                            )
                         )}
                     </>
                 )}

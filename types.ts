@@ -1,6 +1,8 @@
 
 import { Chat, Part, GroundingMetadata } from "@google/genai";
 
+export type CopyFormat = 'plain' | 'markdown' | 'html';
+
 export interface Attachment {
   id: string;
   name: string;
@@ -122,14 +124,23 @@ export interface GeminiService {
     onUsageMetadata: (usage: UsageMetadata) => void, // New callback
     onImageGenerated: (image: { data: string; mimeType: string }) => void,
     onError: (error: Error) => void,
-    onComplete: () => void
+    onComplete: () => void,
+    abortSignal?: AbortSignal
   ) => Promise<void>;
   getAvailableModels: (apiKey?: string) => Promise<ModelOption[]>;
   countTokens: (modelId: string, apiKey: string | undefined, contents: any[]) => Promise<number | null>;
 }
 
 export interface ThoughtSupportingPart extends Part {
-    thought?: any; 
+    thought?: any;
     inlineData?: { mimeType: string; data: string };
     text?: string;
+}
+
+export interface PromptTemplate {
+  id: string;
+  name: string;
+  content: string;
+  category?: string;
+  createdAt: number;
 }
