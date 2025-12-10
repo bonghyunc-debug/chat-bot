@@ -199,29 +199,6 @@ const App: React.FC = () => {
     }
   }, [currentSessionId]);
 
-  // Initialize API Chat Object when critical settings change
-  useEffect(() => {
-    if (currentSettings.modelId && !isModelsLoading && currentSessionId) {
-        const needsReinit = !activeChatSettings ||
-            currentSettings.modelId !== activeChatSettings.modelId ||
-            currentSettings.systemInstruction !== activeChatSettings.systemInstruction ||
-            currentSettings.temperature !== activeChatSettings.temperature ||
-            currentSettings.topP !== activeChatSettings.topP ||
-            currentSettings.topK !== activeChatSettings.topK ||
-            currentSettings.maxOutputTokens !== activeChatSettings.maxOutputTokens ||
-            currentSettings.showThoughts !== activeChatSettings.showThoughts ||
-            currentSettings.useGoogleSearch !== activeChatSettings.useGoogleSearch ||
-            currentSettings.jsonMode !== activeChatSettings.jsonMode || 
-            currentSettings.safetySettings !== activeChatSettings.safetySettings ||
-            JSON.stringify(currentSettings.stopSequences) !== JSON.stringify(activeChatSettings.stopSequences) ||
-            JSON.stringify(currentSettings.toolSettings) !== JSON.stringify(activeChatSettings.toolSettings);
-
-        if (needsReinit) {
-            initializeCurrentChatSession();
-        }
-    }
-  }, [currentSettings, isModelsLoading, currentSessionId, activeChatSettings, initializeCurrentChatSession]);
-
   // --- Logic ---
 
   const handleAddApiKey = (key: string) => {
@@ -425,6 +402,29 @@ const App: React.FC = () => {
       setIsLoading(false);
     }
   }, [currentSettings]);
+
+  // Initialize API Chat Object when critical settings change
+  useEffect(() => {
+    if (currentSettings.modelId && !isModelsLoading && currentSessionId) {
+        const needsReinit = !activeChatSettings ||
+            currentSettings.modelId !== activeChatSettings.modelId ||
+            currentSettings.systemInstruction !== activeChatSettings.systemInstruction ||
+            currentSettings.temperature !== activeChatSettings.temperature ||
+            currentSettings.topP !== activeChatSettings.topP ||
+            currentSettings.topK !== activeChatSettings.topK ||
+            currentSettings.maxOutputTokens !== activeChatSettings.maxOutputTokens ||
+            currentSettings.showThoughts !== activeChatSettings.showThoughts ||
+            currentSettings.useGoogleSearch !== activeChatSettings.useGoogleSearch ||
+            currentSettings.jsonMode !== activeChatSettings.jsonMode ||
+            currentSettings.safetySettings !== activeChatSettings.safetySettings ||
+            JSON.stringify(currentSettings.stopSequences) !== JSON.stringify(activeChatSettings.stopSequences) ||
+            JSON.stringify(currentSettings.toolSettings) !== JSON.stringify(activeChatSettings.toolSettings);
+
+        if (needsReinit) {
+            initializeCurrentChatSession();
+        }
+    }
+  }, [currentSettings, isModelsLoading, currentSessionId, activeChatSettings, initializeCurrentChatSession]);
 
   // Abstracted logic for streaming response, used by both send and regenerate
   // Added optional 'overrideHistory' to support regeneration logic where state is stale
