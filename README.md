@@ -27,6 +27,8 @@ View your app in AI Studio: https://ai.studio/apps/drive/1MlZ6i7tNjctdeWAdX4pojD
 npm run build
 ```
 
+자세한 테스트 체크리스트와 실행 여부는 [TESTING.md](TESTING.md)에서 확인할 수 있습니다.
+
 ## Playground parity helpers
 
 - The **Playground Inspector** (below the header) shows the exact payload, tools, and token usage used for the latest request, so you can validate settings before exporting code.
