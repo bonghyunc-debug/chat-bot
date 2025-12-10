@@ -10,10 +10,6 @@ export default defineConfig(({ mode }) => {
         host: '0.0.0.0',
       },
       plugins: [react()],
-      build: {
-        // 빌드 산출물 크기 경고 완화
-        chunkSizeWarningLimit: 2000,
-      },
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
@@ -22,6 +18,19 @@ export default defineConfig(({ mode }) => {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
+      },
+      build: {
+        rollupOptions: {
+          output: {
+            manualChunks: {
+              'vendor-react': ['react', 'react-dom'],
+              'vendor-genai': ['@google/genai'],
+              'vendor-ui': ['lucide-react'],
+              'vendor-markdown': ['marked', 'dompurify'],
+            }
+          }
+        },
+        chunkSizeWarningLimit: 600,
       }
     };
 });

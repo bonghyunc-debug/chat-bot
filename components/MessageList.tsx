@@ -292,6 +292,7 @@ export const MessageList: React.FC<MessageListProps> = ({
         return (
         <div
           key={msg.id}
+          id={`msg-${msg.id}`}
           className={`group max-w-4xl mx-auto w-full flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
         >
           {/* Label Row */}
