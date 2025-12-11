@@ -74,18 +74,19 @@ const geminiServiceImpl: GeminiService = {
         const ai = getClient(apiKey);
         // 2. Fetch models dynamically from API
         const response = await ai.models.list();
-        
-        if (!response.models) {
+        const responseModels = (response as any).models ?? [];
+
+        if (responseModels.length === 0) {
             return staticModels;
         }
 
         // 3. Filter and Map API response
-        const dynamicModels = response.models
+        const dynamicModels = responseModels
             .filter(m => {
                 const name = m.name?.toLowerCase() || '';
                 // Gemini 3, 2.5, 2.0 시리즈 포함 (1.5는 deprecated로 제외)
-                return name.includes('gemini-3') || 
-                       name.includes('gemini-2.5') || 
+                return name.includes('gemini-3') ||
+                       name.includes('gemini-2.5') ||
                        name.includes('gemini-2.0');
             })
             .map(m => {
@@ -327,8 +328,8 @@ const geminiServiceImpl: GeminiService = {
 
       const chat: Chat = ai.chats.create({
         model: modelId,
-        config: chatConfig,
-        history: validHistory,
+        config: chatConfig as any,
+        history: validHistory as any,
       });
 
       (chat as any)._apiKey = apiKey;

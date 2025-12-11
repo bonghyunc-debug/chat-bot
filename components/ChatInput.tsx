@@ -6,7 +6,7 @@ import { geminiServiceInstance } from '../services/geminiService';
 
 interface ChatInputProps {
   inputText: string;
-  setInputText: (text: string) => void;
+  setInputText: React.Dispatch<React.SetStateAction<string>>;
   onSendMessage: (attachments: Attachment[]) => void;
   isLoading: boolean;
   isEditing: boolean;
