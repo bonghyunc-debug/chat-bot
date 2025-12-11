@@ -20,25 +20,12 @@ import { encryptApiKeys, decryptApiKeys } from './utils/crypto';
 import CompareMode from './components/CompareMode';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { Terminal, X } from 'lucide-react';
+import { AlertTriangle, Terminal, X } from 'lucide-react';
+import { loadPersistedSessions, persistSessionsWithLimits, SESSION_STORAGE_LIMIT_BYTES } from './utils/sessionStorage';
 
 const App: React.FC = () => {
   // --- State: Sessions & Persistence ---
-  const [sessions, setSessions] = useState<ChatSession[]>(() => {
-    try {
-      const saved = localStorage.getItem('gemini_chat_sessions');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        return parsed.map((s: any) => ({
-          ...s,
-          messages: s.messages.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) }))
-        }));
-      }
-    } catch (e) {
-      console.error("Failed to load sessions from local storage", e);
-    }
-    return [];
-  });
+  const [sessions, setSessions] = useState<ChatSession[]>(() => loadPersistedSessions());
 
   // --- State: API Keys Management ---
   const [apiKeys, setApiKeys] = useState<string[]>(() => {
@@ -120,6 +107,8 @@ const App: React.FC = () => {
   const [lastRequestPreview, setLastRequestPreview] = useState<PlaygroundRequestPreview | null>(null);
   const [lastUsage, setLastUsage] = useState<UsageMetadata | null>(null);
   const [thinkingSidePanelContent, setThinkingSidePanelContent] = useState<string | null>(null);
+  const [storageWarnings, setStorageWarnings] = useState<string[]>([]);
+  const [storageBytes, setStorageBytes] = useState<number>(0);
 
   // Track the settings used to initialize the *current* chat object
   const [activeChatSettings, setActiveChatSettings] = useState<ChatSettings | null>(null);
@@ -141,9 +130,24 @@ const App: React.FC = () => {
     initApiKeyPool(apiKeys);
   }, [apiKeys]);
 
-  // Save Sessions to LocalStorage
+  // Save Sessions to LocalStorage with size/PII protections
   useEffect(() => {
-    localStorage.setItem('gemini_chat_sessions', JSON.stringify(sessions));
+    const { trimmedSessions, removedCount, piiDetected, storageBytes } = persistSessionsWithLimits(sessions);
+
+    setStorageBytes(storageBytes);
+
+    const warnings: string[] = [];
+    if (removedCount > 0) {
+      warnings.push(`저장 용량 한도(약 ${(SESSION_STORAGE_LIMIT_BYTES / (1024 * 1024)).toFixed(1)}MB)를 초과하여 오래된 세션 ${removedCount}개가 자동 삭제되었습니다.`);
+    }
+    if (piiDetected) {
+      warnings.push('전화번호/이메일 등 민감정보가 감지되어 저장 시 마스킹 처리되었습니다.');
+    }
+    setStorageWarnings(warnings);
+
+    if (removedCount > 0 && trimmedSessions.length !== sessions.length) {
+      setSessions(trimmedSessions);
+    }
   }, [sessions]);
 
   // Save API Keys to LocalStorage
@@ -810,6 +814,21 @@ const App: React.FC = () => {
 
         {modelsLoadingError && (
            <div className="p-2 bg-red-900/50 text-center text-xs text-red-200 border-b border-red-800">{modelsLoadingError}</div>
+        )}
+
+        {storageWarnings.length > 0 && (
+          <div className="p-3 bg-amber-900/60 text-xs text-amber-50 border-b border-amber-800 space-y-2">
+            <div className="flex items-center gap-2 text-amber-100">
+              <AlertTriangle size={14} className="text-amber-300" />
+              <span>로컬 저장소 사용량 {(storageBytes / (1024 * 1024)).toFixed(2)}MB / {(SESSION_STORAGE_LIMIT_BYTES / (1024 * 1024)).toFixed(1)}MB</span>
+            </div>
+            {storageWarnings.map((warning, idx) => (
+              <div key={idx} className="flex items-start gap-2 text-amber-50">
+                <AlertTriangle size={14} className="text-amber-300 mt-0.5" />
+                <span>{warning}</span>
+              </div>
+            ))}
+          </div>
         )}
 
         <PlaygroundInspector
