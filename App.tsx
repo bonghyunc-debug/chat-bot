@@ -1,972 +1,478 @@
-
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ChatMessage, ModelOption, ChatHistoryItem, ChatSettings, ChatSession, Attachment, UsageMetadata } from './types';
-import { DEFAULT_MODEL_ID, DEFAULT_SYSTEM_INSTRUCTION, DEFAULT_TEMPERATURE, DEFAULT_TOP_P, DEFAULT_TOP_K, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_SHOW_THOUGHTS, DEFAULT_USE_GOOGLE_SEARCH, DEFAULT_JSON_MODE, DEFAULT_SAFETY_SETTING, DEFAULT_STOP_SEQUENCES, DEFAULT_TOOL_SETTINGS } from './constants';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { Header } from './components/Header';
-import { MessageList } from './components/MessageList';
-import { ChatInput } from './components/ChatInput';
-import { ControlPanel } from './components/ControlPanel';
 import { Sidebar } from './components/Sidebar';
+import { ChatInput } from './components/ChatInput';
+import { MessageList } from './components/MessageList';
+import { MessageSearch } from './components/MessageSearch';
+import { SettingsModal } from './components/SettingsModal';
 import { Canvas } from './components/Canvas';
-import CodeExportModal from './components/CodeExportModal';
-import { geminiServiceInstance, generateChatTitle } from './services/geminiService';
-import { Chat, GroundingMetadata } from '@google/genai';
-import { initApiKeyPool, getHealthyApiKey } from './services/apiKeyPool';
-import { PlaygroundInspector, PlaygroundRequestPreview } from './components/PlaygroundInspector';
-import { PromptLibrary } from './components/PromptLibrary';
 import { UsageStats } from './components/UsageStats';
-import { ImageGallery } from './components/ImageGallery';
-import { encryptApiKeys, decryptApiKeys } from './utils/crypto';
-import CompareMode from './components/CompareMode';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
-import { AlertTriangle, Terminal, X } from 'lucide-react';
-import { loadPersistedSessions, persistSessionsWithLimits, SESSION_STORAGE_LIMIT_BYTES } from './utils/sessionStorage';
+import { FunctionCallingPanel } from './components/FunctionCallingPanel';
+import { useSessionManager } from './hooks/useSessionManager';
+import { useApiKeys } from './hooks/useApiKeys';
+import { useChatStream } from './hooks/useChatStream';
+import { useNetworkStatus } from './hooks/useNetworkStatus';
+import { useLocalStorage } from './hooks/useLocalStorage';
+import { initializeChat, sendMessageStream, generateChatTitle, getAvailableModels } from './services/geminiService';
+import { DEFAULT_SETTINGS, SYSTEM_PROMPT_PRESETS, MODEL_SPECS } from './constants';
+import type { ChatSettings, ChatMessage, ModelOption, Attachment, ToolFunctionDefinition, FunctionCallResult } from './types';
 
-const App: React.FC = () => {
-  // --- State: Sessions & Persistence ---
-  const [sessions, setSessions] = useState<ChatSession[]>(() => loadPersistedSessions());
+export default function App() {
+  // State
+  const [settings, setSettings] = useLocalStorage<ChatSettings>('gemini-settings', DEFAULT_SETTINGS);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showCanvas, setShowCanvas] = useState(false);
+  const [showStats, setShowStats] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [showFunctionPanel, setShowFunctionPanel] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
+  const [currentThinking, setCurrentThinking] = useState<string>('');
+  const [searchHighlight, setSearchHighlight] = useState<number | null>(null);
+  const [pendingFunctionCall, setPendingFunctionCall] = useState<FunctionCallResult | null>(null);
 
-  // --- State: API Keys Management ---
-  const [apiKeys, setApiKeys] = useState<string[]>(() => {
-      try {
-          const saved = localStorage.getItem('gemini_api_keys_enc');
-          if (saved) {
-              return decryptApiKeys(saved);
-          }
-          // 기존 평문 데이터 마이그레이션
-          const legacy = localStorage.getItem('gemini_api_keys');
-          if (legacy) {
-              const keys = JSON.parse(legacy);
-              localStorage.removeItem('gemini_api_keys');
-              return Array.isArray(keys) ? keys : [];
-          }
-          return [];
-      } catch (e) {
-          return [];
+  // Custom hooks
+  const { apiKeys, addApiKey, removeApiKey, getActiveKey, rotateKey } = useApiKeys();
+  const {
+    sessions,
+    currentSession,
+    currentSessionId,
+    createSession,
+    selectSession,
+    deleteSession,
+    updateSessionTitle,
+    addMessage,
+    updateMessage,
+    importSessions,
+    exportSessions,
+  } = useSessionManager();
+  const { isStreaming, startStream, stopStream, streamController } = useChatStream();
+  const isOnline = useNetworkStatus();
+
+  // Refs
+  const chatInstanceRef = useRef<any>(null);
+  const messageListRef = useRef<HTMLDivElement>(null);
+
+  // Load available models on mount
+  useEffect(() => {
+    const loadModels = async () => {
+      const apiKey = getActiveKey();
+      if (apiKey) {
+        const models = await getAvailableModels(apiKey);
+        setAvailableModels(models);
       }
-  });
+    };
+    loadModels();
+  }, [apiKeys, getActiveKey]);
 
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [isCanvasOpen, setIsCanvasOpen] = useState(false);
-  const [isControlPanelOpen, setIsControlPanelOpen] = useState(true); // Default open for desktop
-  const [isCodeModalOpen, setIsCodeModalOpen] = useState(false); // Code Export Modal State
-  const [canvasContent, setCanvasContent] = useState<string>('');
-  const [isInspectorOpen, setIsInspectorOpen] = useState(false);
-  const [isCompareModeOpen, setIsCompareModeOpen] = useState(false);
+  // Initialize chat when session or model changes
+  useEffect(() => {
+    const initChat = async () => {
+      const apiKey = getActiveKey();
+      if (!apiKey || !currentSession) return;
 
-  // --- State: Current Session Settings (Active) ---
-  // Initialize from LocalStorage if available, else defaults
-  const [currentSettings, setCurrentSettings] = useState<ChatSettings>(() => {
       try {
-          const saved = localStorage.getItem('gemini_global_settings');
-          if (saved) {
-              const parsed = JSON.parse(saved);
-              // Merge with defaults to ensure all keys exist (in case of updates)
-              return {
-                  modelId: parsed.modelId || DEFAULT_MODEL_ID,
-                  systemInstruction: parsed.systemInstruction ?? DEFAULT_SYSTEM_INSTRUCTION,
-                  temperature: parsed.temperature ?? DEFAULT_TEMPERATURE,
-                  topP: parsed.topP ?? DEFAULT_TOP_P,
-                  topK: parsed.topK ?? DEFAULT_TOP_K,
-                  maxOutputTokens: parsed.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-                  showThoughts: parsed.showThoughts ?? DEFAULT_SHOW_THOUGHTS,
-                  useGoogleSearch: parsed.useGoogleSearch ?? DEFAULT_USE_GOOGLE_SEARCH,
-                  jsonMode: parsed.jsonMode ?? DEFAULT_JSON_MODE,
-                  safetySettings: parsed.safetySettings ?? DEFAULT_SAFETY_SETTING,
-                  stopSequences: parsed.stopSequences ?? DEFAULT_STOP_SEQUENCES,
-                  toolSettings: parsed.toolSettings ?? DEFAULT_TOOL_SETTINGS
-              };
-          }
-      } catch (e) {
-          console.error("Failed to load settings", e);
-      }
-      return {
-          modelId: DEFAULT_MODEL_ID,
-          systemInstruction: DEFAULT_SYSTEM_INSTRUCTION,
-          temperature: DEFAULT_TEMPERATURE,
-          topP: DEFAULT_TOP_P,
-          topK: DEFAULT_TOP_K,
-          maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
-          showThoughts: DEFAULT_SHOW_THOUGHTS,
-          useGoogleSearch: DEFAULT_USE_GOOGLE_SEARCH,
-          jsonMode: DEFAULT_JSON_MODE,
-          safetySettings: DEFAULT_SAFETY_SETTING,
-          stopSequences: DEFAULT_STOP_SEQUENCES,
-          toolSettings: DEFAULT_TOOL_SETTINGS
-      };
-  });
-
-  // --- State: UI & API ---
-  const [apiModels, setApiModels] = useState<ModelOption[]>([]);
-  const [modelsLoadingError, setModelsLoadingError] = useState<string | null>(null);
-  const [isModelsLoading, setIsModelsLoading] = useState<boolean>(false);
-
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [chatSession, setChatSession] = useState<Chat | null>(null);
-  const [lastRequestPreview, setLastRequestPreview] = useState<PlaygroundRequestPreview | null>(null);
-  const [lastUsage, setLastUsage] = useState<UsageMetadata | null>(null);
-  const [thinkingSidePanelContent, setThinkingSidePanelContent] = useState<string | null>(null);
-  const [storageWarnings, setStorageWarnings] = useState<string[]>([]);
-  const [storageBytes, setStorageBytes] = useState<number>(0);
-
-  // Track the settings used to initialize the *current* chat object
-  const [activeChatSettings, setActiveChatSettings] = useState<ChatSettings | null>(null);
-
-  const [inputText, setInputText] = useState<string>('');
-  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
-  const streamAbortControllerRef = useRef<AbortController | null>(null);
-  const [isPromptLibraryOpen, setIsPromptLibraryOpen] = useState(false);
-  const [isUsageStatsOpen, setIsUsageStatsOpen] = useState(false);
-  const [isImageGalleryOpen, setIsImageGalleryOpen] = useState(false);
-
-  // Helper to get current messages
-  const currentMessages = sessions.find(s => s.id === currentSessionId)?.messages || [];
-
-  // --- Effects ---
-
-  // Initialize API Key Pool whenever keys change
-  useEffect(() => {
-    initApiKeyPool(apiKeys);
-  }, [apiKeys]);
-
-  // Save Sessions to LocalStorage with size/PII protections
-  useEffect(() => {
-    const { trimmedSessions, removedCount, piiDetected, storageBytes } = persistSessionsWithLimits(sessions);
-
-    setStorageBytes(storageBytes);
-
-    const warnings: string[] = [];
-    if (removedCount > 0) {
-      warnings.push(`저장 용량 한도(약 ${(SESSION_STORAGE_LIMIT_BYTES / (1024 * 1024)).toFixed(1)}MB)를 초과하여 오래된 세션 ${removedCount}개가 자동 삭제되었습니다.`);
-    }
-    if (piiDetected) {
-      warnings.push('전화번호/이메일 등 민감정보가 감지되어 저장 시 마스킹 처리되었습니다.');
-    }
-    setStorageWarnings(warnings);
-
-    if (removedCount > 0 && trimmedSessions.length !== sessions.length) {
-      setSessions(trimmedSessions);
-    }
-  }, [sessions]);
-
-  // Save API Keys to LocalStorage
-  useEffect(() => {
-    localStorage.setItem('gemini_api_keys_enc', encryptApiKeys(apiKeys));
-  }, [apiKeys]);
-
-  // Save Global Settings to LocalStorage whenever they change
-  useEffect(() => {
-      localStorage.setItem('gemini_global_settings', JSON.stringify(currentSettings));
-  }, [currentSettings]);
-
-  // Load Models
-  useEffect(() => {
-    const fetchAndSetModels = async () => {
-      setIsLoading(true);
-      setIsModelsLoading(true);
-      setModelsLoadingError(null);
-      try {
-        const fetchedModels = await geminiServiceInstance.getAvailableModels(getHealthyApiKey());
-        if (fetchedModels.length > 0) {
-          setApiModels(fetchedModels);
-          if (sessions.length === 0) {
-            createNewSession();
-          } else if (!currentSessionId) {
-            // Fix: Create a copy of sessions array before sorting to avoid state mutation
-            const recent = [...sessions].sort((a,b) => b.lastModified - a.lastModified)[0];
-            if (recent) {
-              setCurrentSessionId(recent.id);
-            }
-          }
-        } else {
-          setModelsLoadingError("호환되는 모델을 찾을 수 없습니다. 기본값을 사용합니다.");
-          setApiModels([{ id: DEFAULT_MODEL_ID, name: `기본: ${DEFAULT_MODEL_ID.split('/').pop()}` }]);
-        }
+        const systemPrompt = settings.systemPrompt || SYSTEM_PROMPT_PRESETS.default;
+        chatInstanceRef.current = await initializeChat(apiKey, {
+          model: settings.model,
+          systemPrompt,
+          temperature: settings.temperature,
+          maxTokens: settings.maxTokens,
+          thinkingBudget: settings.thinkingBudget,
+          useGoogleSearch: settings.useGoogleSearch,
+          toolSettings: settings.toolSettings,
+          history: currentSession.messages.filter(m => m.role !== 'system').map(m => ({
+            role: m.role as 'user' | 'model',
+            parts: [{ text: m.content }],
+          })),
+        });
       } catch (error) {
-        console.error("Failed to fetch models:", error);
-        setModelsLoadingError(`모델을 불러오지 못했습니다. 기본값을 사용합니다.`);
-        setApiModels([{ id: DEFAULT_MODEL_ID, name: `기본값` }]);
-      } finally {
-        setIsModelsLoading(false);
-        setIsLoading(false);
+        console.error('Failed to initialize chat:', error);
       }
     };
-    fetchAndSetModels();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); 
 
-  // Sync Settings when Session Changes
-  useEffect(() => {
-    if (currentSessionId) {
-      const session = sessions.find(s => s.id === currentSessionId);
-      if (session) {
-        // Only update currentSettings if the session has specific settings.
-        // If we want new chats to use global settings, we handle that in createNewSession.
-        // Here, we load the session's saved settings into the UI.
-        
-        // Merge defaults in case of old sessions missing new keys
-        const sessionSettings = {
-            modelId: session.settings.modelId || DEFAULT_MODEL_ID,
-            systemInstruction: session.settings.systemInstruction ?? DEFAULT_SYSTEM_INSTRUCTION,
-            temperature: session.settings.temperature ?? DEFAULT_TEMPERATURE,
-            topP: session.settings.topP ?? DEFAULT_TOP_P,
-            topK: session.settings.topK ?? DEFAULT_TOP_K,
-            maxOutputTokens: session.settings.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-            showThoughts: session.settings.showThoughts ?? DEFAULT_SHOW_THOUGHTS,
-            useGoogleSearch: session.settings.useGoogleSearch ?? DEFAULT_USE_GOOGLE_SEARCH,
-            jsonMode: session.settings.jsonMode ?? DEFAULT_JSON_MODE,
-            safetySettings: session.settings.safetySettings ?? DEFAULT_SAFETY_SETTING,
-            stopSequences: session.settings.stopSequences ?? DEFAULT_STOP_SEQUENCES,
-            toolSettings: session.settings.toolSettings ?? DEFAULT_TOOL_SETTINGS
-        };
-        
-        // We set current settings to the active session's settings
-        setCurrentSettings(sessionSettings);
-      }
-    }
-  }, [currentSessionId]);
+    initChat();
+  }, [currentSessionId, settings.model, getActiveKey]);
 
-  // --- Logic ---
+  // Handle function call response
+  const handleFunctionResponse = useCallback(async (result: unknown) => {
+    if (!pendingFunctionCall || !chatInstanceRef.current) return;
 
-  const handleAddApiKey = (key: string) => {
-      if (!apiKeys.includes(key)) {
-          setApiKeys([...apiKeys, key]);
-      }
-  };
-
-  const handleRemoveApiKey = (key: string) => {
-      setApiKeys(apiKeys.filter(k => k !== key));
-  };
-
-  const createNewSession = () => {
-    const newSession: ChatSession = {
-      id: Date.now().toString(),
-      title: '새 채팅',
-      messages: [],
-      lastModified: Date.now(),
-      // Use currentSettings (which reflects global/last used settings) for new session
-      // instead of resetting to hard defaults. This is better UX.
-      settings: { ...currentSettings } 
+    const responseMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: `[Function Response: ${pendingFunctionCall.name}]\n${JSON.stringify(result, null, 2)}`,
+      timestamp: Date.now(),
     };
-    setSessions(prev => [newSession, ...prev]);
-    setCurrentSessionId(newSession.id);
-    setChatSession(null);
-  };
+    addMessage(responseMessage);
+    setPendingFunctionCall(null);
 
-  const deleteSession = (sessionId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const newSessions = sessions.filter(s => s.id !== sessionId);
-    setSessions(newSessions);
-    if (currentSessionId === sessionId) {
-      if (newSessions.length > 0) {
-        setCurrentSessionId(newSessions[0].id);
-      } else {
-        createNewSession();
-      }
-    }
-  };
+    // Continue the conversation with the function result
+    // This will be handled by the chat instance automatically
+  }, [pendingFunctionCall, addMessage]);
 
-  const handleRenameSession = (sessionId: string, newTitle: string) => {
-    setSessions(prev => prev.map(s => 
-      s.id === sessionId ? { ...s, title: newTitle } : s
-    ));
-  };
+  // Handle sending message
+  const handleSend = useCallback(async (content: string, attachments?: Attachment[]) => {
+    const apiKey = getActiveKey();
+    if (!apiKey || !content.trim()) return;
 
-  const updateCurrentSessionMessages = (updateFn: (msgs: ChatMessage[]) => ChatMessage[]) => {
-    if (!currentSessionId) return;
-    setSessions(prev => prev.map(s => {
-      if (s.id === currentSessionId) {
-        const newMsgs = updateFn(s.messages);
-        let newTitle = s.title;
-        
-        // 첫 메시지가 추가될 때 비동기 제목 생성
-        if (s.messages.length === 0 && newMsgs.length > 0 && s.title === '새 채팅') {
-           const firstUserMsg = newMsgs.find(m => m.role === 'user');
-           if (firstUserMsg) {
-             // 임시 제목 설정
-             newTitle = firstUserMsg.content.slice(0, 30) + (firstUserMsg.content.length > 30 ? '...' : '');
-             
-             // 비동기로 AI 제목 생성 (세션 ID 캡처)
-             const sessionIdToUpdate = s.id;
-             generateChatTitle(firstUserMsg.content, getHealthyApiKey()).then(aiTitle => {
-               setSessions(prevSessions => prevSessions.map(sess => 
-                 sess.id === sessionIdToUpdate ? { ...sess, title: aiTitle } : sess
-               ));
-             });
-           }
-        }
-        return { ...s, messages: newMsgs, title: newTitle, lastModified: Date.now() };
-      }
-      return s;
-    }));
-  };
-
-  const updateCurrentSessionSettings = (newSettings: ChatSettings) => {
-    setCurrentSettings(newSettings); // Update local UI state
-    if (!currentSessionId) return;
-    setSessions(prev => prev.map(s => 
-      s.id === currentSessionId ? { ...s, settings: newSettings } : s
-    ));
-  };
-
-  const createChatHistoryForApi = (msgs: ChatMessage[]): ChatHistoryItem[] => {
-    return msgs
-      .filter(msg => msg.role === 'user' || msg.role === 'model')
-      .map(msg => {
-        let parts: any[] = [];
-        
-        // Handle attachments in history
-        if (msg.role === 'user' && msg.attachments && msg.attachments.length > 0) {
-            msg.attachments.forEach(att => {
-                if (att.category === 'text') {
-                    parts.push({ text: `[File Context: ${att.name}]\n${att.data}\n` });
-                } else {
-                    parts.push({ inlineData: { mimeType: att.mimeType, data: att.data } });
-                }
-            });
-        }
-        
-        if (msg.content) {
-            parts.push({ text: msg.content });
-        }
-
-        // If no content/attachments but message exists (weird edge case), ensure at least empty text
-        if (parts.length === 0) {
-            parts.push({ text: ' ' });
-        }
-
-        return {
-          role: msg.role as 'user' | 'model',
-          parts: parts,
-        };
-      });
-  };
-
-  const buildRequestPreview = (message: string, attachments: Attachment[]): PlaygroundRequestPreview => {
-    const toolConfigs: any[] = [];
-    const isImageModel = currentSettings.modelId.toLowerCase().includes('image');
-    const shouldUseSearch = currentSettings.useGoogleSearch && !currentSettings.jsonMode;
-
-    if (shouldUseSearch) {
-      toolConfigs.push({ googleSearch: {} });
-    }
-
-    if (currentSettings.toolSettings?.enableFunctionCalling && currentSettings.toolSettings.functions.length > 0) {
-      toolConfigs.push({
-        functionDeclarations: currentSettings.toolSettings.functions.map(fn => ({
-          name: fn.name,
-          description: fn.description
-        }))
-      });
-    }
-
-    if (currentSettings.toolSettings?.enableCodeExecution) {
-      toolConfigs.push({ codeExecution: {} });
-    }
-
-    if (currentSettings.toolSettings?.enableUrlGrounding) {
-      toolConfigs.push({ urlFetch: {} });
-    }
-
-    const responseMimeType = currentSettings.jsonMode && !shouldUseSearch && !isImageModel
-      ? 'application/json'
-      : undefined;
-
-    return {
-      model: currentSettings.modelId,
-      message,
-      attachments: attachments.map(att => ({ name: att.name, mimeType: att.mimeType, category: att.category })),
-      config: {
-        systemInstruction: currentSettings.systemInstruction,
-        temperature: currentSettings.temperature,
-        topP: currentSettings.topP,
-        topK: currentSettings.topK,
-        maxOutputTokens: currentSettings.maxOutputTokens,
-        stopSequences: currentSettings.stopSequences,
-        safetySettings: currentSettings.safetySettings,
-        responseMimeType,
-        tools: toolConfigs.length > 0 ? toolConfigs : undefined,
-        jsonMode: currentSettings.jsonMode,
-        useGoogleSearch: currentSettings.useGoogleSearch,
-      },
-      timestamp: new Date().toLocaleString(),
-      flags: {
-        search: shouldUseSearch,
-        jsonMode: !!responseMimeType,
-        thoughts: currentSettings.showThoughts,
-        functions: currentSettings.toolSettings?.functions.length || 0,
-        codeExecution: !!currentSettings.toolSettings?.enableCodeExecution,
-        urlGrounding: !!currentSettings.toolSettings?.enableUrlGrounding,
-      },
-    };
-  };
-
-  const updateCurrentSessionMessagesRef = useRef(updateCurrentSessionMessages);
-  useEffect(() => {
-    updateCurrentSessionMessagesRef.current = updateCurrentSessionMessages;
-  }, [updateCurrentSessionMessages]);
-
-  const initializeCurrentChatSession = useCallback(async (history?: ChatHistoryItem[]) => {
-    if (!currentSettings.modelId) return;
-    setIsLoading(true);
-    try {
-      const selectedKey = getHealthyApiKey();
-      
-      const newSession = await geminiServiceInstance.initializeChat(
-        currentSettings.modelId,
-        currentSettings,
-        history,
-        selectedKey
-      );
-      
-      if (!newSession) {
-          // Explicit null handling instead of throw
-          updateCurrentSessionMessagesRef.current(prev => [...prev, { 
-              id: Date.now().toString(), 
-              role: 'error', 
-              content: '모델 초기화에 실패했습니다 (세션 생성 불가). API 키나 네트워크 상태를 확인해주세요.', 
-              timestamp: new Date() 
-          }]);
-          setIsLoading(false);
-          return;
-      }
-
-      setChatSession(newSession);
-      setActiveChatSettings(currentSettings);
-    } catch (error) {
-      console.error("Error initializing chat session:", error);
-      updateCurrentSessionMessagesRef.current(prev => [...prev, { id: Date.now().toString(), role: 'error', content: `채팅 초기화 오류: ${String(error)}`, timestamp: new Date() }]);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [currentSettings]);
-
-  // Initialize API Chat Object when critical settings change
-  useEffect(() => {
-    if (currentSettings.modelId && !isModelsLoading && currentSessionId) {
-        const needsReinit = !activeChatSettings ||
-            currentSettings.modelId !== activeChatSettings.modelId ||
-            currentSettings.systemInstruction !== activeChatSettings.systemInstruction ||
-            currentSettings.temperature !== activeChatSettings.temperature ||
-            currentSettings.topP !== activeChatSettings.topP ||
-            currentSettings.topK !== activeChatSettings.topK ||
-            currentSettings.maxOutputTokens !== activeChatSettings.maxOutputTokens ||
-            currentSettings.showThoughts !== activeChatSettings.showThoughts ||
-            currentSettings.useGoogleSearch !== activeChatSettings.useGoogleSearch ||
-            currentSettings.jsonMode !== activeChatSettings.jsonMode ||
-            currentSettings.safetySettings !== activeChatSettings.safetySettings ||
-            JSON.stringify(currentSettings.stopSequences) !== JSON.stringify(activeChatSettings.stopSequences) ||
-            JSON.stringify(currentSettings.toolSettings) !== JSON.stringify(activeChatSettings.toolSettings);
-
-        if (needsReinit) {
-            initializeCurrentChatSession();
-        }
-    }
-  }, [currentSettings, isModelsLoading, currentSessionId, activeChatSettings, initializeCurrentChatSession]);
-
-  // Abstracted logic for streaming response, used by both send and regenerate
-  // Added optional 'overrideHistory' to support regeneration logic where state is stale
-  const streamResponse = async (inputContent: string, attachments: Attachment[], overrideHistory?: ChatMessage[]) => {
-    // Create new AbortController for this stream
-    streamAbortControllerRef.current = new AbortController();
-    const abortSignal = streamAbortControllerRef.current.signal;
-
-    setIsLoading(true);
-    setLastUsage(null);
-    setLastRequestPreview(buildRequestPreview(inputContent, attachments));
-    let currentChat = chatSession;
-
-    // Use overrideHistory if provided, otherwise default to currentMessages
-    const effectiveMessages = overrideHistory || currentMessages;
-
-    // Re-init if chat doesn't exist OR if we have overrideHistory (implies context change like regen)
-    if (!currentChat || overrideHistory) {
-         const selectedKey = getHealthyApiKey();
-         
-         const historyMsgs = effectiveMessages.filter(m => m.role === 'user' || m.role === 'model');
-         
-         // For a new chat, the SDK expects history BEFORE the current turn.
-         const historyForInit = createChatHistoryForApi(historyMsgs.slice(0, -1)); 
-         
-         // Directly assign
-         currentChat = await geminiServiceInstance.initializeChat(
-            currentSettings.modelId,
-            currentSettings,
-            historyForInit,
-            selectedKey
-          );
-          
-          if (!currentChat) {
-             // Handle null return explicitly
-             updateCurrentSessionMessages(prev => [...prev, { 
-                 id: Date.now().toString(), 
-                 role: 'error', 
-                 content: '모델과의 연결을 초기화하지 못했습니다. 잠시 후 다시 시도해 주세요.', 
-                 timestamp: new Date() 
-             }]);
-             setIsLoading(false);
-             return;
-          }
-
-          setChatSession(currentChat);
-          setActiveChatSettings(currentSettings);
-    }
-
-    // Defensive check
-    if (!currentChat) {
-       updateCurrentSessionMessages(prev => [...prev, { id: Date.now().toString(), role: 'error', content: '연결이 끊어졌습니다. 새로고침 해주세요.', timestamp: new Date() }]);
-       setIsLoading(false);
-       return;
-    }
-
-    const modelMessageId = (Date.now() + 1).toString();
-    updateCurrentSessionMessages(prev => [
-      ...prev,
-      { id: modelMessageId, role: 'model', content: '', thoughts: '', timestamp: new Date(), isLoading: true },
-    ]);
-
-    await geminiServiceInstance.sendMessageStream(
-      currentChat,
-      inputContent,
+    // Create user message
+    const userMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content,
       attachments,
-      (chunk) => {
-        updateCurrentSessionMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, content: msg.content + chunk, isLoading: true } : msg));
-      },
-      (thoughtChunk) => {
-        updateCurrentSessionMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, thoughts: (msg.thoughts || '') + thoughtChunk, isLoading: true } : msg));
-      },
-      (metadata) => {
-        updateCurrentSessionMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, groundingMetadata: metadata, isLoading: true } : msg));
-      },
-      (usage) => {
-        updateCurrentSessionMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, usageMetadata: usage, isLoading: true } : msg));
-        setLastUsage(usage);
-      },
-      (generatedImage) => {
-        updateCurrentSessionMessages(prev => prev.map(msg => msg.id === modelMessageId ? { 
-            ...msg, 
-            modelAttachment: generatedImage,
-            isLoading: true 
-        } : msg));
-      },
-      (error) => {
-        updateCurrentSessionMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, role: 'error', content: error.message, isLoading: false } : msg));
-        setIsLoading(false);
-        streamAbortControllerRef.current = null;
-      },
-      () => {
-        updateCurrentSessionMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, isLoading: false } : msg));
-        setIsLoading(false);
-        streamAbortControllerRef.current = null;
-      },
-      abortSignal
-    );
-  };
-
-  const handleSendMessage = async (attachments: Attachment[]) => {
-    if (!inputText.trim() && attachments.length === 0) return;
-    const currentInputText = inputText;
-    setInputText('');
-    setEditingMessageId(null);
-    
-    // 1. Add User Message to State
-    const userMessage: ChatMessage = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: currentInputText,
-      timestamp: new Date(),
-      attachments: attachments.length > 0 ? attachments : undefined
+      timestamp: Date.now(),
     };
-    
-    setSessions(prev => prev.map(s => {
-      if (s.id === currentSessionId) {
-        return { ...s, messages: [...s.messages, userMessage], lastModified: Date.now() };
-      }
-      return s;
-    }));
+    addMessage(userMessage);
 
-    // For normal send, we don't need overrideHistory because we just appended to state,
-    // and we want normal continuation.
-    await streamResponse(currentInputText, attachments);
-  };
-
-  // --- New Handler for Sending from Canvas ---
-  const handleSendFromCanvas = async (content: string) => {
-    if (!content.trim() || !currentSessionId || isLoading) return;
-
-    const messageContent = `\`\`\`\n${content}\n\`\`\`\n\n(Canvas 내용 전송됨)`;
-
-    const userMessage: ChatMessage = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: messageContent,
-      timestamp: new Date(),
+    // Create placeholder for assistant message
+    const assistantMessageId = crypto.randomUUID();
+    const assistantMessage: ChatMessage = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+      isStreaming: true,
     };
+    addMessage(assistantMessage);
+    setCurrentThinking('');
 
-    setSessions(prev => prev.map(s => {
-      if (s.id === currentSessionId) {
-        return { ...s, messages: [...s.messages, userMessage], lastModified: Date.now() };
+    try {
+      startStream();
+
+      // Reinitialize chat if needed
+      if (!chatInstanceRef.current) {
+        const systemPrompt = settings.systemPrompt || SYSTEM_PROMPT_PRESETS.default;
+        chatInstanceRef.current = await initializeChat(apiKey, {
+          model: settings.model,
+          systemPrompt,
+          temperature: settings.temperature,
+          maxTokens: settings.maxTokens,
+          thinkingBudget: settings.thinkingBudget,
+          useGoogleSearch: settings.useGoogleSearch,
+          toolSettings: settings.toolSettings,
+        });
       }
-      return s;
-    }));
 
-    await streamResponse(messageContent, []);
-  };
+      let fullContent = '';
+      let thinkingContent = '';
+      let functionCalls: FunctionCallResult[] = [];
+      let metadata: any = null;
 
-  const handleRegenerate = async () => {
-    if (!currentSessionId || isLoading) return;
-
-    const msgs = currentMessages;
-    if (msgs.length === 0) return;
-
-    const lastMsg = msgs[msgs.length - 1];
-    let userMsgToRetry: ChatMessage | undefined;
-    let slicedMsgs: ChatMessage[] = [];
-
-    // Check if last message is model (normal regen) or error
-    if (lastMsg.role === 'model' || lastMsg.role === 'error') {
-        slicedMsgs = msgs.slice(0, -1); // Remove model answer
-        userMsgToRetry = slicedMsgs[slicedMsgs.length - 1]; // Get user question
-    } else {
-        return; // Last message is user, wait for answer (or manual retry handled differently)
-    }
-
-    if (userMsgToRetry && userMsgToRetry.role === 'user') {
-         // 1. Update UI State synchronously
-         setSessions(prev => prev.map(s => {
-            if (s.id === currentSessionId) {
-                return { ...s, messages: slicedMsgs, lastModified: Date.now() };
+      await sendMessageStream(
+        chatInstanceRef.current,
+        content,
+        {
+          attachments,
+          signal: streamController?.signal,
+          onChunk: (chunk) => {
+            if (chunk.thinking) {
+              thinkingContent += chunk.thinking;
+              setCurrentThinking(thinkingContent);
             }
-            return s;
-        }));
-        
-        // 2. Force reset chat session to clear SDK history
-        setChatSession(null); 
+            if (chunk.text) {
+              fullContent += chunk.text;
+              updateMessage(assistantMessageId, {
+                content: fullContent,
+                thinking: thinkingContent || undefined,
+              });
+            }
+          },
+          onFunctionCall: (fc) => {
+            functionCalls.push(fc);
+            setPendingFunctionCall(fc);
+            updateMessage(assistantMessageId, {
+              content: fullContent,
+              functionCalls: [...functionCalls],
+            });
+          },
+          onImageGenerated: (image) => {
+            updateMessage(assistantMessageId, {
+              content: fullContent,
+              modelAttachment: image,
+            });
+          },
+          onComplete: (result) => {
+            metadata = result;
+            updateMessage(assistantMessageId, {
+              content: fullContent,
+              thinking: thinkingContent || undefined,
+              isStreaming: false,
+              functionCalls: functionCalls.length > 0 ? functionCalls : undefined,
+              metadata: {
+                model: settings.model,
+                usageMetadata: result.usageMetadata,
+                groundingMetadata: result.groundingMetadata,
+              },
+            });
+          },
+          onError: (error) => {
+            updateMessage(assistantMessageId, {
+              content: fullContent || '오류가 발생했습니다.',
+              isStreaming: false,
+              error: error.message,
+            });
 
-        // 3. Trigger generation using the CORRECTED history
-        // We pass `slicedMsgs` which contains the User Message at the end.
-        // streamResponse logic will slice off the last user message for `initializeChat` history
-        // and send `userMsgToRetry.content` as the new prompt.
-        await streamResponse(
-            userMsgToRetry.content, 
-            userMsgToRetry.attachments || [], 
-            slicedMsgs // <--- Critical Fix: Pass correct history snapshot
-        );
-    }
-  };
-
-
-  const handleClearChat = () => {
-    if (confirm("이 대화를 정말 지우시겠습니까?")) {
-        updateCurrentSessionMessages(() => []);
-        setChatSession(null); 
-    }
-  };
-
-  const handleEditMessage = (messageId: string) => {
-    const messageToEdit = currentMessages.find(msg => msg.id === messageId);
-    if (messageToEdit && messageToEdit.role === 'user') {
-      setInputText(messageToEdit.content);
-      setEditingMessageId(messageId);
-      
-      // 버전 히스토리 저장
-      updateCurrentSessionMessages(prev => {
-        const index = prev.findIndex(m => m.id === messageId);
-        if (index === -1) return prev;
-        
-        const editedMsg = prev[index];
-        const previousVersions = editedMsg.previousVersions || [];
-        
-        // 현재 버전을 히스토리에 추가
-        const newVersion = {
-          content: editedMsg.content,
-          timestamp: new Date()
-        };
-        
-        // 이전 버전들 + 현재 버전 (최대 10개 유지)
-        const updatedVersions = [...previousVersions, newVersion].slice(-10);
-        
-        // 해당 메시지 이후 모든 메시지 제거, 편집 메시지에 버전 히스토리 저장
-        const beforeMessages = prev.slice(0, index);
-        return beforeMessages;
-      });
-      
-      setChatSession(null);
-    }
-  };
-  
-  const handleOpenCanvas = (content: string) => {
-      setCanvasContent(content);
-      setIsCanvasOpen(true);
-      setIsControlPanelOpen(false); // Close control panel when canvas opens to save space
-  };
-
-  const handleExportSessions = () => {
-    const dataStr = JSON.stringify(sessions, null, 2);
-    const blob = new Blob([dataStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `gemini-chat-export-${new Date().toISOString().slice(0,10)}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
-  const handleImportSessions = (importedSessions: ChatSession[]) => {
-    // 중복 ID 방지를 위해 새 ID 부여
-    const newSessions = importedSessions.map(s => ({
-      ...s,
-      id: `imported-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      lastModified: Date.now()
-    }));
-    setSessions(prev => [...newSessions, ...prev]);
-    if (newSessions.length > 0) {
-      setCurrentSessionId(newSessions[0].id);
-    }
-  };
-
-  const handleStopGeneration = () => {
-    if (streamAbortControllerRef.current) {
-      streamAbortControllerRef.current.abort();
-      streamAbortControllerRef.current = null;
-      setIsLoading(false);
-      // 현재 로딩 중인 메시지의 isLoading을 false로
-      updateCurrentSessionMessages(prev => 
-        prev.map(msg => msg.isLoading ? { ...msg, isLoading: false, content: msg.content + '\n\n[생성 중단됨]' } : msg)
+            // Rotate API key on rate limit
+            if (error.message.includes('429') || error.message.includes('quota')) {
+              rotateKey();
+            }
+          },
+        }
       );
-    }
-  };
 
-  // 키보드 단축키 지원
+      // Generate title for new sessions
+      if (currentSession && currentSession.messages.length <= 2 && currentSession.title.startsWith('New')) {
+        const title = await generateChatTitle(apiKey, content, settings.model);
+        if (title) {
+          updateSessionTitle(currentSessionId!, title);
+        }
+      }
+    } catch (error: any) {
+      console.error('Send error:', error);
+      updateMessage(assistantMessageId, {
+        content: `오류: ${error.message}`,
+        isStreaming: false,
+        error: error.message,
+      });
+    } finally {
+      stopStream();
+    }
+  }, [
+    getActiveKey,
+    settings,
+    addMessage,
+    updateMessage,
+    startStream,
+    stopStream,
+    streamController,
+    currentSession,
+    currentSessionId,
+    updateSessionTitle,
+    rotateKey,
+  ]);
+
+  // Handle message edit
+  const handleEditMessage = useCallback((messageId: string, newContent: string) => {
+    updateMessage(messageId, { content: newContent, edited: true });
+  }, [updateMessage]);
+
+  // Handle message regeneration
+  const handleRegenerate = useCallback(async (messageId: string) => {
+    if (!currentSession) return;
+
+    const messageIndex = currentSession.messages.findIndex(m => m.id === messageId);
+    if (messageIndex === -1) return;
+
+    // Find the previous user message
+    let userMessageIndex = messageIndex - 1;
+    while (userMessageIndex >= 0 && currentSession.messages[userMessageIndex].role !== 'user') {
+      userMessageIndex--;
+    }
+
+    if (userMessageIndex >= 0) {
+      const userMessage = currentSession.messages[userMessageIndex];
+      // Reset chat instance to replay from that point
+      chatInstanceRef.current = null;
+      handleSend(userMessage.content, userMessage.attachments);
+    }
+  }, [currentSession, handleSend]);
+
+  // Handle search result navigation
+  const handleSearchResult = useCallback((index: number) => {
+    setSearchHighlight(index);
+    setTimeout(() => {
+      const element = document.querySelector(`[data-message-index="${index}"]`);
+      element?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 100);
+  }, []);
+
+  // Handle function definitions update
+  const handleFunctionsUpdate = useCallback((functions: ToolFunctionDefinition[]) => {
+    setSettings(prev => ({
+      ...prev,
+      toolSettings: {
+        ...prev.toolSettings,
+        enableFunctionCalling: functions.length > 0,
+        functions,
+        enableCodeExecution: prev.toolSettings?.enableCodeExecution ?? false,
+        enableUrlGrounding: prev.toolSettings?.enableUrlGrounding ?? false,
+      },
+    }));
+    // Reset chat instance to apply new functions
+    chatInstanceRef.current = null;
+  }, [setSettings]);
+
+  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ctrl/Cmd + N: 새 채팅
-      if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
-        e.preventDefault();
-        createNewSession();
+      if (e.ctrlKey || e.metaKey) {
+        switch (e.key) {
+          case 'f':
+            e.preventDefault();
+            setShowSearch(prev => !prev);
+            break;
+          case ',':
+            e.preventDefault();
+            setShowSettings(prev => !prev);
+            break;
+          case 'b':
+            e.preventDefault();
+            setSidebarOpen(prev => !prev);
+            break;
+          case 'n':
+            e.preventDefault();
+            createSession();
+            break;
+          case 'j':
+            e.preventDefault();
+            setShowFunctionPanel(prev => !prev);
+            break;
+        }
       }
-      // Ctrl/Cmd + /: 설정 패널 토글
-      if ((e.ctrlKey || e.metaKey) && e.key === '/') {
-        e.preventDefault();
-        setIsControlPanelOpen(prev => !prev);
-      }
-      // Ctrl/Cmd + Shift + C: 캔버스 토글
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'C') {
-        e.preventDefault();
-        setIsCanvasOpen(prev => !prev);
-      }
-      // Ctrl/Cmd + Shift + S: 사용량 통계
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'S') {
-        e.preventDefault();
-        setIsUsageStatsOpen(true);
-      }
-      // Escape: 모달/패널 닫기
       if (e.key === 'Escape') {
-        if (isCodeModalOpen) setIsCodeModalOpen(false);
-        else if (isPromptLibraryOpen) setIsPromptLibraryOpen(false);
-        else if (isUsageStatsOpen) setIsUsageStatsOpen(false);
-        else if (isImageGalleryOpen) setIsImageGalleryOpen(false);
-        else if (isCanvasOpen) setIsCanvasOpen(false);
+        setShowSearch(false);
+        setShowSettings(false);
+        setShowCanvas(false);
+        setShowStats(false);
+        setShowFunctionPanel(false);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isCodeModalOpen, isPromptLibraryOpen, isUsageStatsOpen, isImageGalleryOpen, isCanvasOpen]);
+  }, [createSession]);
 
-  const getCurrentModelDisplayName = () => { const model = apiModels.find(m => m.id === currentSettings.modelId); return model ? model.name : currentSettings.modelId; };
+  // Check if API key is configured
+  const hasApiKey = apiKeys.length > 0;
 
   return (
-    <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
-      <Sidebar
-        sessions={sessions}
-        currentSessionId={currentSessionId}
-        onSelectSession={setCurrentSessionId}
-        onCreateSession={createNewSession}
-        onDeleteSession={deleteSession}
-        onRenameSession={handleRenameSession}
-        onExportSessions={handleExportSessions}
-        onImportSessions={handleImportSessions}
-      />
-      
-      <div className="flex flex-col flex-1 h-full w-full relative min-w-0">
-        <Header
-          onClearChat={handleClearChat}
-          onOpenSettingsModal={() => setIsControlPanelOpen(!isControlPanelOpen)}
-          isLoading={isLoading || isModelsLoading}
-          currentModelName={getCurrentModelDisplayName()}
-          onToggleSidebar={() => {}} // No-op for desktop
-          isCanvasOpen={isCanvasOpen}
-          onToggleCanvas={() => {
-              setIsCanvasOpen(!isCanvasOpen);
-              if (!isCanvasOpen) setIsControlPanelOpen(false);
-          }}
-          isControlPanelOpen={isControlPanelOpen}
-          onOpenUsageStats={() => setIsUsageStatsOpen(true)}
-          onOpenImageGallery={() => setIsImageGalleryOpen(true)}
-          messages={currentMessages}
-          onScrollToMessage={(id) => { const el = document.getElementById(`msg-${id}`); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }}
-          onOpenCompareMode={() => setIsCompareModeOpen(true)}
+    <ErrorBoundary>
+      <div className="app">
+        {/* Sidebar */}
+        <Sidebar
+          sessions={sessions}
+          currentSessionId={currentSessionId}
+          isOpen={sidebarOpen}
+          onToggle={() => setSidebarOpen(prev => !prev)}
+          onSelectSession={selectSession}
+          onNewSession={createSession}
+          onDeleteSession={deleteSession}
+          onRenameSession={updateSessionTitle}
+          onImport={importSessions}
+          onExport={exportSessions}
+          onOpenSettings={() => setShowSettings(true)}
         />
 
-        {modelsLoadingError && (
-           <div className="p-2 bg-red-900/50 text-center text-xs text-red-200 border-b border-red-800">{modelsLoadingError}</div>
-        )}
+        {/* Main content */}
+        <div className="main-content">
+          <Header
+            model={settings.model}
+            modelSpecs={MODEL_SPECS[settings.model]}
+            isOnline={isOnline}
+            onToggleCanvas={() => setShowCanvas(prev => !prev)}
+            onToggleStats={() => setShowStats(prev => !prev)}
+            onToggleSearch={() => setShowSearch(prev => !prev)}
+            onToggleFunctions={() => setShowFunctionPanel(prev => !prev)}
+            showCanvas={showCanvas}
+            showStats={showStats}
+            hasFunctions={settings.toolSettings?.functions?.length > 0}
+          />
 
-        {storageWarnings.length > 0 && (
-          <div className="p-3 bg-amber-900/60 text-xs text-amber-50 border-b border-amber-800 space-y-2">
-            <div className="flex items-center gap-2 text-amber-100">
-              <AlertTriangle size={14} className="text-amber-300" />
-              <span>로컬 저장소 사용량 {(storageBytes / (1024 * 1024)).toFixed(2)}MB / {(SESSION_STORAGE_LIMIT_BYTES / (1024 * 1024)).toFixed(1)}MB</span>
-            </div>
-            {storageWarnings.map((warning, idx) => (
-              <div key={idx} className="flex items-start gap-2 text-amber-50">
-                <AlertTriangle size={14} className="text-amber-300 mt-0.5" />
-                <span>{warning}</span>
-              </div>
-            ))}
-          </div>
-        )}
+          {showSearch && currentSession && (
+            <MessageSearch
+              messages={currentSession.messages}
+              onResultSelect={handleSearchResult}
+              onClose={() => setShowSearch(false)}
+            />
+          )}
 
-        <PlaygroundInspector
-          isOpen={isInspectorOpen}
-          onToggle={() => setIsInspectorOpen(!isInspectorOpen)}
-          requestPreview={lastRequestPreview}
-          usage={lastUsage}
-        />
-
-        <div className="flex-1 flex overflow-hidden relative">
-            <div className="flex flex-col flex-1 h-full relative min-w-0 transition-all duration-300">
-                
-                {/* Scrollable Message Area */}
-                <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-950">
-                    <MessageList
-                        messages={currentMessages}
-                        onEditMessage={handleEditMessage}
-                        onRegenerate={handleRegenerate}
-                        lastUserMessageId={currentMessages.slice().reverse().find(msg => msg.role === 'user')?.id}
-                        showThoughts={currentSettings.showThoughts}
-                        onOpenCanvas={handleOpenCanvas}
-                        isLoading={isLoading}
-                        modelId={currentSettings.modelId}
-                        onOpenThinkingSidePanel={(thoughts: string) => {
-                          setThinkingSidePanelContent(thoughts);
-                          setIsCanvasOpen(false);
-                        }}
-                    />
-                </div>
-                
-                 {/* Chat Input - Static at bottom in flex flow */}
-                 <ChatInput
-                    inputText={inputText}
-                    setInputText={setInputText}
-                    onSendMessage={handleSendMessage}
-                    isLoading={isLoading}
-                    isEditing={!!editingMessageId}
-                    modelId={currentSettings.modelId}
-                    apiKey={getHealthyApiKey()}
-                    onStopGeneration={handleStopGeneration}
-                    onOpenPromptLibrary={() => setIsPromptLibraryOpen(true)}
-                />
-            </div>
-
-            {/* Right Control Panel (Desktop Docked Style) */}
-            {isControlPanelOpen && !isCanvasOpen && (
-                 <ControlPanel
-                    isOpen={isControlPanelOpen}
-                    onClose={() => setIsControlPanelOpen(false)}
-                    currentSettings={currentSettings}
-                    availableModels={apiModels}
-                    onSettingsChange={updateCurrentSessionSettings}
-                    isModelsLoading={isModelsLoading}
-                    modelsLoadingError={modelsLoadingError}
-                    apiKeys={apiKeys}
-                    onAddApiKey={handleAddApiKey}
-                    onRemoveApiKey={handleRemoveApiKey}
-                    onOpenCodeModal={() => setIsCodeModalOpen(true)}
-                 />
-            )}
-
-            {/* Canvas Panel */}
-            {isCanvasOpen && !thinkingSidePanelContent && (
-                <div className="w-1/2 border-l border-slate-800 h-full flex flex-col z-10 shadow-2xl bg-slate-900">
-                    <Canvas
-                        content={canvasContent}
-                        isOpen={isCanvasOpen}
-                        onClose={() => setIsCanvasOpen(false)}
-                        onUpdateContent={setCanvasContent}
-                        onSendToChat={handleSendFromCanvas}
-                    />
-                </div>
-            )}
-
-            {/* Thinking Side Panel */}
-            {thinkingSidePanelContent && (
-              <div className="w-1/2 border-l border-purple-900/50 h-full flex flex-col z-10 shadow-2xl bg-slate-950">
-                <div className="flex items-center justify-between px-4 py-3 border-b border-purple-900/50 bg-purple-950/30">
-                  <div className="flex items-center gap-2">
-                    <Terminal size={16} className="text-purple-400" />
-                    <span className="text-sm font-bold text-purple-300">Thinking Process</span>
-                  </div>
-                  <button
-                    onClick={() => setThinkingSidePanelContent(null)}
-                    className="p-1.5 text-slate-400 hover:text-white rounded hover:bg-slate-800"
-                  >
-                    <X size={18} />
+          <div className="chat-container">
+            {!hasApiKey ? (
+              <div className="no-api-key">
+                <div className="no-api-key-content">
+                  <h2>API 키가 필요합니다</h2>
+                  <p>Gemini API를 사용하려면 먼저 API 키를 설정해주세요.</p>
+                  <button onClick={() => setShowSettings(true)} className="btn-primary">
+                    설정 열기
                   </button>
                 </div>
-                <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
-                  <div 
-                    className="markdown-body text-slate-300"
-                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(marked.parse(thinkingSidePanelContent) as string) }}
-                  />
-                </div>
               </div>
+            ) : (
+              <>
+                <MessageList
+                  ref={messageListRef}
+                  messages={currentSession?.messages || []}
+                  isStreaming={isStreaming}
+                  highlightIndex={searchHighlight}
+                  showThoughts={settings.showThoughts}
+                  onEdit={handleEditMessage}
+                  onRegenerate={handleRegenerate}
+                  onFunctionResponse={handleFunctionResponse}
+                  pendingFunctionCall={pendingFunctionCall}
+                />
+
+                <ChatInput
+                  onSend={handleSend}
+                  onStop={stopStream}
+                  isStreaming={isStreaming}
+                  disabled={!hasApiKey || !isOnline}
+                  model={settings.model}
+                  apiKey={getActiveKey() || ''}
+                />
+              </>
             )}
-            
-            {/* Code Export Modal */}
-            <CodeExportModal
-                isOpen={isCodeModalOpen}
-                onClose={() => setIsCodeModalOpen(false)}
-                modelId={currentSettings.modelId}
-                settings={currentSettings}
-            />
-
-            {/* Prompt Library Modal */}
-            <PromptLibrary
-              isOpen={isPromptLibraryOpen}
-              onClose={() => setIsPromptLibraryOpen(false)}
-              onSelectPrompt={(content) => setInputText(content)}
-            />
-
-            {/* Usage Stats Modal */}
-            <UsageStats
-              isOpen={isUsageStatsOpen}
-              onClose={() => setIsUsageStatsOpen(false)}
-              sessions={sessions}
-            />
-
-            {/* Image Gallery Modal */}
-            <ImageGallery
-              isOpen={isImageGalleryOpen}
-              onClose={() => setIsImageGalleryOpen(false)}
-              sessions={sessions}
-            />
-
-            <CompareMode
-              isOpen={isCompareModeOpen}
-              onClose={() => setIsCompareModeOpen(false)}
-              baseSettings={currentSettings}
-              apiKey={getHealthyApiKey()}
-              availableModels={apiModels}
-            />
+          </div>
         </div>
-      </div>
-    </div>
-  );
-};
 
-export default App;
+        {/* Canvas (Thinking side panel) */}
+        {showCanvas && (
+          <Canvas
+            thinking={currentThinking}
+            isOpen={showCanvas}
+            onClose={() => setShowCanvas(false)}
+          />
+        )}
+
+        {/* Function Calling Panel */}
+        {showFunctionPanel && (
+          <FunctionCallingPanel
+            functions={settings.toolSettings?.functions || []}
+            onFunctionsChange={handleFunctionsUpdate}
+            onClose={() => setShowFunctionPanel(false)}
+          />
+        )}
+
+        {/* Settings Modal */}
+        {showSettings && (
+          <SettingsModal
+            settings={settings}
+            onSettingsChange={setSettings}
+            apiKeys={apiKeys}
+            onAddApiKey={addApiKey}
+            onRemoveApiKey={removeApiKey}
+            availableModels={availableModels}
+            onClose={() => setShowSettings(false)}
+          />
+        )}
+
+        {/* Usage Stats Modal */}
+        {showStats && (
+          <UsageStats
+            sessions={sessions}
+            onClose={() => setShowStats(false)}
+          />
+        )}
+
+        {/* Offline indicator */}
+        {!isOnline && (
+          <div className="offline-banner">
+            오프라인 상태입니다. 인터넷 연결을 확인해주세요.
+          </div>
+        )}
+      </div>
+    </ErrorBoundary>
+  );
+}

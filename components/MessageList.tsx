@@ -1,706 +1,80 @@
 
-import React, { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
-import { ChatMessage, Attachment } from '../types';
-import { Edit3, Copy, Check, Globe, LayoutTemplate, Download, FileText, FileAudio, FileVideo, File, RotateCw, BarChart2 } from 'lucide-react';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
-import { calculateCost } from '../utils/pricing';
-import ThinkingDisplay from './ThinkingDisplay';
-import CodeBlock from './CodeBlock';
+import React, { useImperativeHandle, forwardRef, useRef, useState } from 'react';
+import { ChatMessage, FunctionCallResult } from '../types';
+import { ThinkingDisplay } from './ThinkingDisplay';
 
-// Declare hljs from window (loaded in index.html)
-declare const hljs: any;
-
-// Copy Format Dropdown Component
-const CopyDropdown: React.FC<{
-  content: string;
-  messageId: string;
-  onCopySuccess: (id: string) => void;
-}> = ({ content, messageId, onCopySuccess }) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    if (isOpen) document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isOpen]);
-
-  const handleCopy = async (format: 'plain' | 'markdown' | 'html') => {
-    let textToCopy = content;
-    
-    if (format === 'plain') {
-      // Strip markdown syntax
-      textToCopy = content
-        .replace(/```[\s\S]*?```/g, (match) => match.replace(/```\w*\n?/g, '').trim())
-        .replace(/`([^`]+)`/g, '$1')
-        .replace(/\*\*([^*]+)\*\*/g, '$1')
-        .replace(/\*([^*]+)\*/g, '$1')
-        .replace(/^#+\s/gm, '')
-        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
-    } else if (format === 'html') {
-      const rawHtml = marked.parse(content);
-      textToCopy = DOMPurify.sanitize(rawHtml as string);
-    }
-    // markdown: 원본 그대로
-
-    try {
-      await navigator.clipboard.writeText(textToCopy);
-      onCopySuccess(messageId);
-      setIsOpen(false);
-    } catch (err) {
-      console.error('Copy failed:', err);
-    }
-  };
-
-  return (
-    <div ref={dropdownRef} className="relative">
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="p-1.5 text-slate-500 hover:text-sky-400 hover:bg-slate-800 rounded transition-colors"
-        title="복사 옵션"
-      >
-        <Copy size={14} />
-      </button>
-      
-      {isOpen && (
-        <div className="absolute bottom-full mb-1 left-0 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 min-w-[120px] py-1">
-          <button
-            onClick={() => handleCopy('plain')}
-            className="w-full px-3 py-1.5 text-xs text-left text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
-          >
-            Plain Text
-          </button>
-          <button
-            onClick={() => handleCopy('markdown')}
-            className="w-full px-3 py-1.5 text-xs text-left text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
-          >
-            Markdown
-          </button>
-          <button
-            onClick={() => handleCopy('html')}
-            className="w-full px-3 py-1.5 text-xs text-left text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
-          >
-            HTML
-          </button>
-        </div>
-      )}
-    </div>
-  );
-  };
 interface MessageListProps {
   messages: ChatMessage[];
-  onEditMessage: (messageId: string) => void;
-  onRegenerate: () => void;
-  lastUserMessageId?: string;
-  showThoughts: boolean;
-  onOpenCanvas: (content: string) => void;
-  isLoading?: boolean;
-  modelId: string;
-  onOpenThinkingSidePanel?: (thoughts: string) => void;
+  isStreaming: boolean;
+  highlightIndex: number | null;
+  showThoughts?: boolean;
+  onEdit?: (messageId: string) => void;
+  onRegenerate?: (messageId: string) => void;
+  onFunctionResponse?: (result: unknown) => void;
+  pendingFunctionCall?: FunctionCallResult | null;
 }
 
-marked.setOptions({
-  breaks: true,
-  gfm: true,
-});
-
-const renderMarkdown = (content: string) => {
-  const rawMarkup = marked.parse(content);
-  const cleanMarkup = DOMPurify.sanitize(rawMarkup as string);
-  return { __html: cleanMarkup };
-};
-
-const renderMarkdownWithCodeBlocks = (
-  content: string,
-  onOpenCanvas: (code: string) => void
-): React.ReactNode => {
-  const codeBlockRegex = /```(\w*)\n?([\s\S]*?)```/g;
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  let match;
-  let keyIndex = 0;
-
-  while ((match = codeBlockRegex.exec(content)) !== null) {
-    if (match.index > lastIndex) {
-      const textBefore = content.slice(lastIndex, match.index);
-      const html = DOMPurify.sanitize(marked.parse(textBefore) as string);
-      parts.push(
-        <div
-          key={`text-${keyIndex++}`}
-          className="markdown-body"
-          dangerouslySetInnerHTML={{ __html: html }}
-        />
-      );
-    }
-
-    const language = match[1] || 'plaintext';
-    const code = match[2].trim();
-    parts.push(
-      <CodeBlock
-        key={`code-${keyIndex++}`}
-        code={code}
-        language={language}
-        onOpenInCanvas={onOpenCanvas}
-        showLineNumbers={code.split('\n').length > 5}
-      />
-    );
-
-    lastIndex = match.index + match[0].length;
-  }
-
-  if (lastIndex < content.length) {
-    const textAfter = content.slice(lastIndex);
-    const html = DOMPurify.sanitize(marked.parse(textAfter) as string);
-    parts.push(
-      <div
-        key={`text-${keyIndex++}`}
-        className="markdown-body"
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-    );
-  }
-
-  return <>{parts}</>;
-};
-
-const AttachmentPreview: React.FC<{ att: Attachment }> = React.memo(({ att }) => {
-  if (att.category === 'image') {
-    return (
-      <div className="relative group overflow-hidden rounded-lg border border-slate-700">
-        <img
-          src={`data:${att.mimeType};base64,${att.data}`} 
-          alt={att.name} 
-          className="max-h-64 w-full object-cover"
-        />
-        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-          <span className="text-xs text-white font-mono">{att.name}</span>
-        </div>
-      </div>
-    );
-  }
-
-  let Icon = File;
-  let label = 'File';
-  if (att.category === 'pdf') { Icon = FileText; label = 'PDF'; }
-  else if (att.category === 'audio') { Icon = FileAudio; label = 'AUDIO'; }
-  else if (att.category === 'video') { Icon = FileVideo; label = 'VIDEO'; }
-  else if (att.category === 'text') { Icon = FileText; label = 'TEXT'; }
-
-  return (
-    <div className="flex items-center gap-3 p-3 bg-slate-900/80 rounded-lg border border-slate-700 min-w-[200px]">
-      <div className="p-2 bg-slate-800 rounded text-sky-400">
-        <Icon size={20} />
-      </div>
-      <div className="flex flex-col min-w-0">
-        <span className="text-xs font-bold text-slate-300 truncate">{att.name}</span>
-        <span className="text-[10px] text-slate-500 font-mono uppercase">{label} • {att.mimeType.split('/').pop()}</span>
-      </div>
-    </div>
-  );
-});
-
-// 개별 메시지 아이템 컴포넌트 (메모이제이션)
-interface MessageItemProps {
-  msg: ChatMessage;
-  isLastMessage: boolean;
-  isLastUserMessageId: boolean;
-  showThoughts: boolean;
-  isGlobalLoading: boolean;
-  onEditMessage: (id: string) => void;
-  onRegenerate: () => void;
-  onOpenCanvas: (content: string) => void;
-  onCopyMessage: (content: string, id: string) => void;
-  copiedMessageId: string | null;
-  expandedThoughts: Record<string, boolean>;
-  onToggleThoughts: (id: string) => void;
-  onTypewriterUpdate?: () => void;
-  modelId: string;
-  thinkingDisplayMode: Record<string, 'collapsed' | 'timeline' | 'full'>;
-  onThinkingModeChange: (msgId: string, mode: 'collapsed' | 'timeline' | 'full') => void;
-  onOpenThinkingSidePanel?: (thoughts: string) => void;
-  showVersionHistory: Record<string, boolean>;
-  setShowVersionHistory: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
-}
-
-const MessageItem = React.memo<MessageItemProps>(({ 
-  msg,
-  isLastMessage,
-  isLastUserMessageId,
+export const MessageList = forwardRef<HTMLDivElement, MessageListProps>(({
+  messages,
+  isStreaming,
+  highlightIndex,
   showThoughts,
-  isGlobalLoading,
-  onEditMessage,
+  onEdit,
   onRegenerate,
-  onOpenCanvas,
-  onCopyMessage,
-  copiedMessageId,
-  expandedThoughts,
-  onToggleThoughts,
-  onTypewriterUpdate,
-  modelId,
-  thinkingDisplayMode,
-  onThinkingModeChange,
-  onOpenThinkingSidePanel,
-  showVersionHistory,
-  setShowVersionHistory
-}) => {
-  const isModel = msg.role === 'model' || msg.role === 'error';
-  const isUser = msg.role === 'user';
+  onFunctionResponse,
+  pendingFunctionCall,
+}, ref) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [functionResponse, setFunctionResponse] = useState('');
+
+  useImperativeHandle(ref, () => containerRef.current as HTMLDivElement);
+
+  const handleSubmitFunction = () => {
+    if (!onFunctionResponse) return;
+    try {
+      const parsed = functionResponse ? JSON.parse(functionResponse) : {};
+      onFunctionResponse(parsed);
+      setFunctionResponse('');
+    } catch (err) {
+      console.error('Invalid JSON', err);
+    }
+  };
 
   return (
-    <div
-      id={`msg-${msg.id}`}
-      data-message={msg.id}
-      data-last-user={isLastUserMessageId ? 'true' : 'false'}
-      className={`group max-w-4xl mx-auto w-full flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
-    >
-      {/* Label Row */}
-      <div className={`flex items-center gap-2 mb-2 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
-        <span className={`text-xs font-bold tracking-wide uppercase ${isUser ? 'text-slate-400' : 'text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-sky-400'}`}>
-          {isModel ? 'Model' : 'User'}
-        </span>
-        <span className="text-[10px] text-slate-600 font-mono">
-          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-        </span>
-      </div>
-
-      <div className={`relative w-full ${isUser ? 'flex justify-end' : ''}`}>
-        <div
-          className={`
-            relative rounded-2xl p-4 sm:p-5 text-sm leading-relaxed shadow-sm
-            ${isUser
-              ? 'bg-slate-800 text-slate-100 max-w-[85%] rounded-tr-sm border border-slate-700/50'
-              : 'bg-transparent text-slate-100 w-full pl-0 border-none'
-            }
-          `}
-        >
-          {/* User Attachments */}
-          {isUser && msg.attachments && msg.attachments.length > 0 && (
-            <div className="mb-4 flex flex-wrap gap-2">
-              {msg.attachments.map(att => <AttachmentPreview key={att.id} att={att} />)}
-            </div>
+    <div className="message-list" ref={containerRef}>
+      {messages.map((msg, idx) => (
+        <div key={msg.id} className={`message-item ${highlightIndex === idx ? 'highlight' : ''}`}>
+          <div className="message-meta">
+            <span className="role">{msg.role}</span>
+            <span className="time">{new Date(msg.timestamp).toLocaleTimeString()}</span>
+          </div>
+          <div className="message-content">{msg.content}</div>
+          <ThinkingDisplay thinking={msg.thinking} thoughts={msg.thoughts} showThoughts={showThoughts} />
+          {onEdit && (
+            <button className="btn-link" onClick={() => onEdit(msg.id)}>편집</button>
           )}
-
-          {/* Model Generated Image */}
-          {isModel && msg.modelAttachment && (
-            <div className="mb-6 group/image relative inline-block">
-              <img
-                src={`data:${msg.modelAttachment.mimeType};base64,${msg.modelAttachment.data}`}
-                alt="Gemini 생성 이미지"
-                className="max-h-[400px] w-auto rounded-xl border border-slate-700 shadow-xl"
-              />
-              <a
-                href={`data:${msg.modelAttachment.mimeType};base64,${msg.modelAttachment.data}`}
-                download={`gemini-generated-${Date.now()}.png`}
-                className="absolute bottom-2 right-2 p-2 bg-black/60 hover:bg-black/80 text-white rounded-full opacity-0 group-hover/image:opacity-100 transition-opacity backdrop-blur-sm"
-                title="이미지 다운로드"
-              >
-                <Download size={16} />
-              </a>
-            </div>
+          {onRegenerate && (
+            <button className="btn-link" onClick={() => onRegenerate(msg.id)}>다시 생성</button>
           )}
+        </div>
+      ))}
 
-          {/* Thinking Process */}
-          {showThoughts && isModel && msg.thoughts && (
-            <ThinkingDisplay
-              thoughts={msg.thoughts}
-              isExpanded={expandedThoughts[msg.id] || false}
-              onToggle={() => onToggleThoughts(msg.id)}
-              displayMode={thinkingDisplayMode[msg.id] || 'collapsed'}
-              onModeChange={(mode) => onThinkingModeChange(msg.id, mode)}
-              onOpenSidePanel={onOpenThinkingSidePanel}
-            />
-          )}
-
-          {/* Main Content */}
-          {(msg.content || (isModel && msg.thoughts && showThoughts)) ? (
-            <>
-              {msg.isLoading && isModel ? (
-                <Typewriter
-                  content={msg.content}
-                  onUpdate={isLastMessage ? onTypewriterUpdate : undefined}
-                />
-              ) : (
-                <div className="text-[15px]">
-                  {renderMarkdownWithCodeBlocks(msg.content || '', onOpenCanvas)}
-                </div>
-              )}
-            </>
-          ) : (
-            msg.isLoading && isModel && <span className="inline-block w-2 h-5 bg-sky-500 animate-pulse align-middle ml-1"></span>
-          )}
-
-          {isUser && msg.previousVersions && msg.previousVersions.length > 0 && (
-            <button
-              onClick={() => setShowVersionHistory(prev => ({ ...prev, [msg.id]: !prev[msg.id] }))}
-              className="text-[10px] text-slate-500 hover:text-sky-400 mt-1"
-            >
-              📜 {msg.previousVersions.length}개 이전 버전
-            </button>
-          )}
-
-          {showVersionHistory[msg.id] && msg.previousVersions && (
-            <div className="mt-2 p-2 bg-slate-900/50 rounded border border-slate-800 space-y-2">
-              {msg.previousVersions.map((v, i) => (
-                <div key={i} className="text-xs text-slate-500">
-                  <span className="text-slate-600">v{i + 1}</span>
-                  <span className="mx-2">•</span>
-                  <span>{new Date(v.timestamp).toLocaleTimeString()}</span>
-                  <p className="text-slate-400 mt-1 truncate">{v.content}</p>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Grounding Sources */}
-          {isModel && msg.groundingMetadata?.groundingChunks && msg.groundingMetadata.groundingChunks.length > 0 && (
-            <div className="mt-6 pt-4 border-t border-slate-800">
-              <div className="flex items-center text-xs text-slate-500 mb-3 uppercase tracking-wider font-bold">
-                <Globe size={12} className="mr-1.5" />
-                <span>Sources</span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {msg.groundingMetadata.groundingChunks.map((chunk, index) => {
-                  if (chunk.web?.uri && chunk.web?.title) {
-                    return (
-                      <a
-                        key={index}
-                        href={chunk.web.uri}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center p-2 rounded-lg bg-slate-900/50 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 transition-all group/link"
-                      >
-                        <span className="w-5 h-5 rounded bg-slate-800 flex items-center justify-center mr-3 text-[10px] text-slate-400 font-mono group-hover/link:bg-slate-700 group-hover/link:text-white transition-colors">
-                          {index + 1}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs text-sky-400 truncate group-hover/link:underline">{chunk.web.title}</p>
-                        </div>
-                      </a>
-                    );
-                  }
-                  return null;
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Token Usage */}
-          {isModel && msg.usageMetadata && (
-            <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-500 font-mono bg-slate-900/40 w-fit px-2 py-1.5 rounded border border-slate-800/50 select-none">
-              <div className="flex items-center gap-1.5" title="Prompt Tokens">
-                <span className="w-1.5 h-1.5 rounded-full bg-indigo-500/50"></span>
-                <span>In: {msg.usageMetadata.promptTokenCount.toLocaleString()}</span>
-              </div>
-              <div className="flex items-center gap-1.5" title="Response Tokens">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/50"></span>
-                <span>Out: {msg.usageMetadata.candidatesTokenCount.toLocaleString()}</span>
-              </div>
-              <div className="flex items-center gap-1.5 border-l border-slate-800 pl-2 ml-1" title="Total Tokens">
-                <span>Total: {msg.usageMetadata.totalTokenCount.toLocaleString()}</span>
-              </div>
-              <div className="flex items-center gap-1.5 border-l border-slate-800 pl-2 ml-1 text-emerald-400" title="예상 비용">
-                <span>💰 ${calculateCost(
-                  modelId,
-                  msg.usageMetadata.promptTokenCount,
-                  msg.usageMetadata.candidatesTokenCount
-                ).total.toFixed(4)}</span>
-              </div>
-            </div>
-          )}
-
-          {/* Action Buttons */}
-          <div className={`flex items-center gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 ${isUser ? 'justify-end' : 'justify-start'}`}>
-            {isUser && (
-              <>
-                <button
-                  onClick={() => onEditMessage(msg.id)}
-                  className="p-1.5 text-slate-500 hover:text-sky-400 hover:bg-slate-800 rounded transition-colors"
-                  title="수정하고 다시 보내기"
-                >
-                  <Edit3 size={14} />
-                </button>
-                <button
-                  onClick={() => onCopyMessage(msg.content, msg.id)}
-                  className="p-1.5 text-slate-500 hover:text-sky-400 hover:bg-slate-800 rounded transition-colors"
-                  title="복사"
-                >
-                  {copiedMessageId === msg.id ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
-                </button>
-              </>
-            )}
-
-            {isModel && !msg.isLoading && (
-              <>
-                {isLastMessage && !isGlobalLoading && (
-                  <button
-                    onClick={onRegenerate}
-                    className="p-1.5 text-slate-500 hover:text-sky-400 hover:bg-slate-800 rounded transition-colors"
-                    title="답변 다시 생성"
-                  >
-                    <RotateCw size={14} />
-                  </button>
-                )}
-
-                {msg.content && (
-                  <button
-                    onClick={() => onOpenCanvas(msg.content)}
-                    className="p-1.5 text-slate-500 hover:text-sky-400 hover:bg-slate-800 rounded transition-colors"
-                    title="캔버스에서 열기"
-                  >
-                    <LayoutTemplate size={14} />
-                  </button>
-                )}
-
-                {msg.content && (
-                  copiedMessageId === msg.id ? (
-                    <span className="p-1.5 text-emerald-400">
-                      <Check size={14} />
-                    </span>
-                  ) : (
-                    <CopyDropdown
-                      content={msg.content}
-                      messageId={msg.id}
-                      onCopySuccess={(id) => onCopyMessage(msg.content, id)}
-                    />
-                  )
-                )}
-              </>
-            )}
+      {pendingFunctionCall && (
+        <div className="function-response-input">
+          <h5>함수 응답 전송: {pendingFunctionCall.name}</h5>
+          <textarea
+            className="textarea"
+            value={functionResponse}
+            onChange={(e) => setFunctionResponse(e.target.value)}
+            placeholder="JSON 응답을 입력하세요"
+          />
+          <div className="btn-row">
+            <button className="btn-primary" onClick={handleSubmitFunction}>응답 전송</button>
           </div>
         </div>
-      </div>
+      )}
+
+      {isStreaming && <div className="streaming-indicator">생성 중...</div>}
     </div>
   );
-}, (prevProps, nextProps) => {
-  // 커스텀 비교 함수: 변경이 없으면 리렌더링 건너뛰기
-  return (
-    prevProps.msg.id === nextProps.msg.id &&
-    prevProps.msg.content === nextProps.msg.content &&
-    prevProps.msg.thoughts === nextProps.msg.thoughts &&
-    prevProps.msg.isLoading === nextProps.msg.isLoading &&
-    prevProps.isLastMessage === nextProps.isLastMessage &&
-    prevProps.showThoughts === nextProps.showThoughts &&
-    prevProps.isGlobalLoading === nextProps.isGlobalLoading &&
-    prevProps.copiedMessageId === nextProps.copiedMessageId &&
-    prevProps.expandedThoughts[prevProps.msg.id] === nextProps.expandedThoughts[nextProps.msg.id] &&
-    prevProps.thinkingDisplayMode[prevProps.msg.id] === nextProps.thinkingDisplayMode[nextProps.msg.id] &&
-    prevProps.showVersionHistory[prevProps.msg.id] === nextProps.showVersionHistory[nextProps.msg.id]
-  );
 });
-
-// --- Optimized Typewriter Component ---
-const Typewriter: React.FC<{ content: string; onUpdate?: () => void }> = React.memo(({ content, onUpdate }) => {
-  const [displayedContent, setDisplayedContent] = useState('');
-  const contentRef = useRef(content);
-  const onUpdateRef = useRef(onUpdate);
-  const rafIdRef = useRef<number | null>(null);
-  const lastUpdateRef = useRef<number>(0);
-
-  useEffect(() => {
-    contentRef.current = content;
-    onUpdateRef.current = onUpdate;
-  }, [content, onUpdate]);
-
-  useEffect(() => {
-    if (content.length < displayedContent.length) {
-      setDisplayedContent('');
-    }
-  }, [content, displayedContent.length]);
-
-  useEffect(() => {
-    const UPDATE_INTERVAL = 16; // ~60fps
-
-    const animate = (timestamp: number) => {
-      if (timestamp - lastUpdateRef.current >= UPDATE_INTERVAL) {
-        lastUpdateRef.current = timestamp;
-
-        setDisplayedContent((prev) => {
-          const target = contentRef.current;
-          if (prev.length >= target.length) return prev;
-
-          const remaining = target.length - prev.length;
-          let step = 1;
-          if (remaining > 100) step = 10;
-          else if (remaining > 50) step = 5;
-          else if (remaining > 20) step = 3;
-          else if (remaining > 5) step = 2;
-
-          const nextContent = target.slice(0, prev.length + step);
-
-          // 스크롤 업데이트는 스로틀링
-          if (onUpdateRef.current && remaining > 10) {
-            onUpdateRef.current();
-          }
-
-          return nextContent;
-        });
-      }
-
-      rafIdRef.current = requestAnimationFrame(animate);
-    };
-
-    rafIdRef.current = requestAnimationFrame(animate);
-
-    return () => {
-      if (rafIdRef.current !== null) {
-        cancelAnimationFrame(rafIdRef.current);
-      }
-    };
-  }, []);
-
-  // 마크다운 렌더링 메모이제이션
-  const renderedMarkdown = useMemo(() => renderMarkdown(displayedContent), [displayedContent]);
-
-  return (
-    <div
-      className="markdown-body blinking-cursor"
-      dangerouslySetInnerHTML={renderedMarkdown}
-    />
-  );
-});
-
-const MessageListInner: React.FC<MessageListProps> = ({
-    messages,
-    onEditMessage,
-    onRegenerate,
-    lastUserMessageId,
-    showThoughts,
-    onOpenCanvas,
-    isLoading,
-    modelId,
-    onOpenThinkingSidePanel
-}) => {
-  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
-  const [expandedThoughts, setExpandedThoughts] = useState<Record<string, boolean>>({});
-  const [thinkingDisplayMode, setThinkingDisplayMode] = useState<Record<string, 'collapsed' | 'timeline' | 'full'>>({});
-  const [showVersionHistory, setShowVersionHistory] = useState<Record<string, boolean>>({});
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  
-  // Track whether we should stick to the bottom
-  const shouldAutoScrollRef = useRef(true);
-
-  // Check scroll position before updates
-  useLayoutEffect(() => {
-      if (!containerRef.current) return;
-      const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
-      // If we are within 50px of the bottom, we should auto-scroll
-      const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
-      shouldAutoScrollRef.current = isNearBottom;
-  }, [messages, showThoughts]); // Trigger before render when data changes
-
-  // Perform scroll after updates
-  useEffect(() => {
-    if (bottomRef.current && shouldAutoScrollRef.current) {
-        bottomRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    }
-  }, [messages, showThoughts]);
-
-  // Handle manual scroll events to update auto-scroll capability
-  const handleScroll = () => {
-      if (!containerRef.current) return;
-      const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
-      // 바닥에서 100px 이내면 자동 스크롤 활성화
-      shouldAutoScrollRef.current = scrollHeight - scrollTop - clientHeight < 100;
-  };
-
-  useEffect(() => {
-    if (typeof hljs !== 'undefined' && containerRef.current) {
-      // 마지막 메시지의 코드 블록만 하이라이팅
-      const lastMessage = containerRef.current.querySelector('[data-message]:last-child');
-      if (lastMessage) {
-        lastMessage.querySelectorAll('pre code:not([data-highlighted])').forEach((block) => {
-          hljs.highlightElement(block as HTMLElement);
-          block.setAttribute('data-highlighted', 'true');
-        });
-      }
-    }
-  }, [messages, showThoughts]);
-
-  const handleCopyMessage = async (content: string, messageId: string) => {
-    if (!navigator.clipboard) return;
-    try {
-      await navigator.clipboard.writeText(content);
-      setCopiedMessageId(messageId);
-      setTimeout(() => setCopiedMessageId(null), 1500);
-    } catch (err) {
-      console.error('Failed to copy text: ', err);
-    }
-  };
-
-  const toggleThoughts = (id: string) => {
-      setExpandedThoughts(prev => ({ ...prev, [id]: !prev[id] }));
-  };
-
-  const handleThinkingModeChange = (msgId: string, mode: 'collapsed' | 'timeline' | 'full') => {
-    setThinkingDisplayMode(prev => ({ ...prev, [msgId]: mode }));
-    if (mode !== 'collapsed') {
-      setExpandedThoughts(prev => ({ ...prev, [msgId]: true }));
-    }
-  };
-
-  // Called by Typewriter to force scroll if we are already following
-  const handleTypewriterUpdate = () => {
-      if (bottomRef.current && shouldAutoScrollRef.current) {
-          bottomRef.current.scrollIntoView({ behavior: 'auto', block: 'end' });
-      }
-  };
-
-  return (
-    // We attach the ref to the outer container if we want to track scroll position, 
-    // but in this layout (flex-1 overflow-y-auto is in App.tsx wrapper), we are a child.
-    // To fix smart scroll, we need access to the scroll container.
-    // Since App.tsx passes us into a div with overflow-y-auto, checking scroll here is tricky without a ref to parent.
-    // For this implementation, we will assume standard behavior where `bottomRef` brings us to view.
-    // However, to truly prevent jumpiness, this component really wants to be the scroll container itself.
-    // Current App structure: <div className="flex-1 overflow-y-auto ..."><MessageList /></div>
-    
-    // We will leave the div structure as is but rely on the effect.
-    <div 
-      ref={containerRef}
-      onScroll={handleScroll}
-      className="w-full h-full p-4 sm:p-8 space-y-8 pb-4"
-    >
-      
-      {/* Messages */}
-      {messages.map((msg, index) => {
-        const isLastMessage = index === messages.length - 1;
-        const isLastUserMessageId = lastUserMessageId === msg.id;
-
-        return (
-          <MessageItem
-            key={msg.id}
-            msg={msg}
-            isLastMessage={isLastMessage}
-            isLastUserMessageId={isLastUserMessageId}
-            showThoughts={showThoughts}
-            isGlobalLoading={!!isLoading}
-            onEditMessage={onEditMessage}
-            onRegenerate={onRegenerate}
-            onOpenCanvas={onOpenCanvas}
-            onCopyMessage={handleCopyMessage}
-            copiedMessageId={copiedMessageId}
-            expandedThoughts={expandedThoughts}
-            onToggleThoughts={toggleThoughts}
-            onTypewriterUpdate={handleTypewriterUpdate}
-            modelId={modelId}
-            thinkingDisplayMode={thinkingDisplayMode}
-            onThinkingModeChange={handleThinkingModeChange}
-            onOpenThinkingSidePanel={onOpenThinkingSidePanel}
-            showVersionHistory={showVersionHistory}
-            setShowVersionHistory={setShowVersionHistory}
-          />
-        );
-      })}
-      {/* Anchor for Auto-scroll */}
-      <div ref={bottomRef} />
-    </div>
-  );
-};
-
-export const MessageList = React.memo(MessageListInner);

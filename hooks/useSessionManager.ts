@@ -1,155 +1,100 @@
-// hooks/useSessionManager.ts
-import { useState, useCallback, useMemo, useEffect } from 'react';
-import { ChatSession, ChatMessage, ChatSettings } from '../types';
-import { DEFAULT_MODEL_ID, DEFAULT_SYSTEM_INSTRUCTION, DEFAULT_TEMPERATURE, DEFAULT_TOP_P, DEFAULT_TOP_K, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_SHOW_THOUGHTS, DEFAULT_USE_GOOGLE_SEARCH, DEFAULT_JSON_MODE, DEFAULT_SAFETY_SETTING, DEFAULT_STOP_SEQUENCES, DEFAULT_TOOL_SETTINGS } from '../constants';
-import { useLocalStorage } from './useLocalStorage';
+import { useCallback, useMemo, useState, useEffect } from 'react';
+import type { ChatMessage, ChatSession } from '../types';
 
-const getDefaultSettings = (): ChatSettings => ({
-  modelId: DEFAULT_MODEL_ID,
-  systemInstruction: DEFAULT_SYSTEM_INSTRUCTION,
-  temperature: DEFAULT_TEMPERATURE,
-  topP: DEFAULT_TOP_P,
-  topK: DEFAULT_TOP_K,
-  maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
-  showThoughts: DEFAULT_SHOW_THOUGHTS,
-  useGoogleSearch: DEFAULT_USE_GOOGLE_SEARCH,
-  jsonMode: DEFAULT_JSON_MODE,
-  safetySettings: DEFAULT_SAFETY_SETTING,
-  stopSequences: DEFAULT_STOP_SEQUENCES,
-  toolSettings: DEFAULT_TOOL_SETTINGS
+const STORAGE_KEY = 'gemini_sessions';
+
+const createEmptySession = (): ChatSession => ({
+  id: crypto.randomUUID(),
+  title: 'New Chat',
+  messages: [],
+  lastModified: Date.now(),
 });
 
-const deserializeSessions = (json: string): ChatSession[] => {
-  const parsed = JSON.parse(json);
-  return parsed.map((s: any) => ({
-    ...s,
-    messages: s.messages.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) }))
-  }));
-};
-
 export const useSessionManager = () => {
-  const [sessions, setSessions] = useLocalStorage<ChatSession[]>(
-    'gemini_chat_sessions',
-    [],
-    { deserialize: deserializeSessions }
-  );
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(() => {
-    if (sessions.length > 0) {
-      const sorted = [...sessions].sort((a, b) => b.lastModified - a.lastModified);
-      return sorted[0]?.id ?? null;
-    }
-    return null;
+  const [sessions, setSessions] = useState<ChatSession[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [createEmptySession()];
   });
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
 
-  const currentSession = useMemo(() => 
-    sessions.find(s => s.id === currentSessionId) ?? null,
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+  }, [sessions]);
+
+  const currentSession = useMemo(
+    () => sessions.find(s => s.id === (currentSessionId || sessions[0]?.id)) || sessions[0],
     [sessions, currentSessionId]
   );
 
-  const currentMessages = useMemo(() => 
-    currentSession?.messages ?? [],
-    [currentSession]
-  );
+  const updateSessionMessages = useCallback((sessionId: string, updater: (messages: ChatMessage[]) => ChatMessage[]) => {
+    setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: updater(s.messages), lastModified: Date.now() } : s));
+  }, []);
 
-  const createNewSession = useCallback((settings?: ChatSettings) => {
-    const newSession: ChatSession = {
-      id: Date.now().toString(),
-      title: '새 채팅',
-      messages: [],
-      lastModified: Date.now(),
-      settings: settings ?? getDefaultSettings()
-    };
+  const createSession = useCallback(() => {
+    const newSession = createEmptySession();
     setSessions(prev => [newSession, ...prev]);
     setCurrentSessionId(newSession.id);
     return newSession.id;
-  }, [setSessions]);
+  }, []);
+
+  const selectSession = useCallback((sessionId: string) => {
+    setCurrentSessionId(sessionId);
+  }, []);
 
   const deleteSession = useCallback((sessionId: string) => {
-    setSessions(prev => {
-      const newSessions = prev.filter(s => s.id !== sessionId);
-      if (currentSessionId === sessionId) {
-        const nextSession = newSessions[0];
-        setCurrentSessionId(nextSession?.id ?? null);
-      }
-      return newSessions;
-    });
-  }, [setSessions, currentSessionId]);
-
-  const renameSession = useCallback((sessionId: string, newTitle: string) => {
-    setSessions(prev => prev.map(s =>
-      s.id === sessionId ? { ...s, title: newTitle } : s
-    ));
-  }, [setSessions]);
-
-  const updateSessionMessages = useCallback((
-    sessionId: string,
-    updateFn: (messages: ChatMessage[]) => ChatMessage[]
-  ) => {
-    setSessions(prev => prev.map(s => {
-      if (s.id === sessionId) {
-        const newMessages = updateFn(s.messages);
-        return { ...s, messages: newMessages, lastModified: Date.now() };
-      }
-      return s;
-    }));
-  }, [setSessions]);
-
-  const updateSessionSettings = useCallback((sessionId: string, settings: ChatSettings) => {
-    setSessions(prev => prev.map(s =>
-      s.id === sessionId ? { ...s, settings } : s
-    ));
-  }, [setSessions]);
+    setSessions(prev => prev.filter(s => s.id !== sessionId));
+    if (currentSessionId === sessionId) {
+      setCurrentSessionId(null);
+    }
+  }, [currentSessionId]);
 
   const updateSessionTitle = useCallback((sessionId: string, title: string) => {
-    setSessions(prev => prev.map(s =>
-      s.id === sessionId ? { ...s, title } : s
-    ));
-  }, [setSessions]);
-
-  // 세션 유효성 검증 및 복구
-  const validateAndRecoverSessions = useCallback(() => {
-    setSessions(prev => {
-      const validSessions = prev.filter(session => {
-        // 필수 필드 검증
-        if (!session.id || !session.title || !Array.isArray(session.messages)) {
-          console.warn(`Invalid session detected: ${session.id}`);
-          return false;
-        }
-        return true;
-      }).map(session => ({
-        ...session,
-        // 누락된 필드 복구
-        lastModified: session.lastModified || Date.now(),
-        settings: session.settings || getDefaultSettings(),
-        messages: session.messages.map(msg => ({
-          ...msg,
-          timestamp: msg.timestamp instanceof Date ? msg.timestamp : new Date(msg.timestamp),
-          id: msg.id || `recovered-${Date.now()}-${Math.random().toString(36).slice(2)}`
-        }))
-      }));
-
-      return validSessions;
-    });
-  }, [setSessions]);
-
-  // 컴포넌트 마운트 시 세션 검증
-  useEffect(() => {
-    validateAndRecoverSessions();
+    setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, title, lastModified: Date.now() } : s));
   }, []);
+
+  const addMessage = useCallback((message: ChatMessage) => {
+    const targetId = currentSession?.id || createSession();
+    updateSessionMessages(targetId, messages => [...messages, message]);
+  }, [currentSession, createSession, updateSessionMessages]);
+
+  const updateMessage = useCallback((messageId: string, updates: Partial<ChatMessage>) => {
+    const targetId = currentSession?.id;
+    if (!targetId) return;
+    updateSessionMessages(targetId, messages => messages.map(m => m.id === messageId ? { ...m, ...updates } : m));
+  }, [currentSession, updateSessionMessages]);
+
+  const importSessions = useCallback((imported: ChatSession[]) => {
+    setSessions(prev => [...imported, ...prev]);
+  }, []);
+
+  const exportSessions = useCallback(() => {
+    const dataStr = JSON.stringify(sessions, null, 2);
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `gemini-chat-backup-${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [sessions]);
 
   return {
     sessions,
-    setSessions,
-    currentSessionId,
-    setCurrentSessionId,
     currentSession,
-    currentMessages,
-    createNewSession,
+    currentSessionId: currentSession?.id || currentSessionId,
+    createSession,
+    selectSession,
     deleteSession,
-    renameSession,
-    updateSessionMessages,
-    updateSessionSettings,
     updateSessionTitle,
-    validateAndRecoverSessions
+    addMessage,
+    updateMessage,
+    importSessions,
+    exportSessions,
+    updateSessionMessages,
+    setSessions,
+    setCurrentSessionId,
   };
 };

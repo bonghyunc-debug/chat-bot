@@ -1,60 +1,51 @@
-// hooks/useApiKeys.ts
 import { useState, useCallback, useEffect } from 'react';
-import { encryptApiKeys, decryptApiKeys } from '../utils/crypto';
-import { initApiKeyPool, getHealthyApiKey } from '../services/apiKeyPool';
 
-const STORAGE_KEY = 'gemini_api_keys_enc';
-const LEGACY_KEY = 'gemini_api_keys';
+const STORAGE_KEY = 'gemini_api_keys';
 
 export const useApiKeys = () => {
   const [apiKeys, setApiKeysState] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        return decryptApiKeys(saved);
-      }
-      // 기존 평문 데이터 마이그레이션
-      const legacy = localStorage.getItem(LEGACY_KEY);
-      if (legacy) {
-        const keys = JSON.parse(legacy);
-        localStorage.removeItem(LEGACY_KEY);
-        return Array.isArray(keys) ? keys : [];
-      }
-      return [];
+      return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
     }
   });
 
-  // API 키 풀 초기화
   useEffect(() => {
-    initApiKeyPool(apiKeys);
-  }, [apiKeys]);
-
-  // localStorage 동기화
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, encryptApiKeys(apiKeys));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(apiKeys));
   }, [apiKeys]);
 
   const addApiKey = useCallback((key: string) => {
+    setApiKeysState(prev => (prev.includes(key) ? prev : [...prev, key]));
+  }, []);
+
+  const removeApiKey = useCallback((indexOrKey: number | string) => {
     setApiKeysState(prev => {
-      if (prev.includes(key)) return prev;
-      return [...prev, key];
+      if (typeof indexOrKey === 'number') {
+        return prev.filter((_, i) => i !== indexOrKey);
+      }
+      return prev.filter(k => k !== indexOrKey);
     });
   }, []);
 
-  const removeApiKey = useCallback((key: string) => {
-    setApiKeysState(prev => prev.filter(k => k !== key));
-  }, []);
-
   const getActiveKey = useCallback(() => {
-    return getHealthyApiKey();
+    return apiKeys[0];
+  }, [apiKeys]);
+
+  const rotateKey = useCallback(() => {
+    setApiKeysState(prev => {
+      if (prev.length <= 1) return prev;
+      const [first, ...rest] = prev;
+      return [...rest, first];
+    });
   }, []);
 
   return {
     apiKeys,
     addApiKey,
     removeApiKey,
-    getActiveKey
+    getActiveKey,
+    rotateKey,
   };
 };
